@@ -3,7 +3,38 @@
 До фикса label_map keyed by input id, lookup by value → для radio
 'да/нет' могло отдать "да" вместо реальной метки.
 """
-from app.questionnaire import _parse_questionnaire_rich
+from app.config import CONFIG
+from app.questionnaire import _parse_questionnaire_rich, get_questionnaire_answer, questionnaire_preset_previews
+
+
+def test_saved_preset_answer_follows_applicant_gender(monkeypatch):
+    original = "Да, работала с CRM-системами и 1С."
+    monkeypatch.setattr(CONFIG, "questionnaire_templates", [
+        {"keywords": ["crm"], "answer": original},
+        {"keywords": ["особый"], "answer": "Я работала с особой системой."},
+    ])
+
+    monkeypatch.setattr(CONFIG, "llm_applicant_gender", "male")
+    assert get_questionnaire_answer("Есть опыт с CRM?") == "Да, работал с CRM-системами и 1С."
+    assert questionnaire_preset_previews()[original] == "Да, работал с CRM-системами и 1С."
+
+    monkeypatch.setattr(CONFIG, "llm_applicant_gender", "neutral")
+    assert get_questionnaire_answer("Есть опыт с CRM?") == "Да, есть опыт работы с CRM-системами и 1С."
+    assert get_questionnaire_answer("Особый опыт?") == "Я работала с особой системой."
+
+
+def test_preset_with_mixed_gender_words_is_fully_inflected(monkeypatch):
+    monkeypatch.setattr(CONFIG, "questionnaire_templates", [{
+        "keywords": ["о себе"],
+        "answer": ("Ответственный и целеустремлённый специалист с опытом работы. "
+                   "Быстро обучаюсь, умею работать в команде и самостоятельно. "
+                   "Готова к новым задачам и развитию."),
+    }])
+    monkeypatch.setattr(CONFIG, "llm_applicant_gender", "female")
+    assert get_questionnaire_answer("Расскажите о себе").startswith("Ответственная и целеустремлённая")
+    monkeypatch.setattr(CONFIG, "llm_applicant_gender", "neutral")
+    answer = get_questionnaire_answer("Расскажите о себе")
+    assert "Готова" not in answer and "Ответственный" not in answer
 
 
 def test_textarea_extracted():

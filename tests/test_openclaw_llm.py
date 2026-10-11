@@ -156,3 +156,9 @@ def test_questionnaire_default_answer_uses_gender_until_customized(monkeypatch):
 
     monkeypatch.setattr(CONFIG, "questionnaire_default_answer", "Мой кастомный ответ.")
     assert questionnaire_default_answer() == "Мой кастомный ответ."
+
+
+def test_saved_builtin_default_still_follows_gender(monkeypatch):
+    monkeypatch.setattr(CONFIG, "questionnaire_default_answer", "Готов рассказать подробнее на собеседовании.")
+    monkeypatch.setattr(CONFIG, "llm_applicant_gender", "neutral")
+    assert questionnaire_default_answer() == "Подробнее расскажу на собеседовании."

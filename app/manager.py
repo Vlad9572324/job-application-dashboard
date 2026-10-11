@@ -26,6 +26,7 @@ except Exception:
     _MSK = None  # fallback на local
 
 from app.logging_utils import log_debug, log_exception, _is_login_page
+from app.questionnaire import questionnaire_preset_previews
 from app.vacancy_signals import normalize_vacancy_signals, vacancy_signal_priority
 from app.vacancy_salary import salary_for_ruble_threshold
 from app.mutation_safety import MutationBlocked, ensure_mutation_allowed
@@ -2426,6 +2427,7 @@ class BotManager:
                 "title_include_keywords": getattr(CONFIG, "title_include_keywords", []),
                 "title_exclude_keywords": getattr(CONFIG, "title_exclude_keywords", []),
                 "questionnaire_templates": CONFIG.questionnaire_templates,
+                "questionnaire_preset_previews": questionnaire_preset_previews(),
                 "questionnaire_default_answer": questionnaire_default_answer(),
                 "letter_templates": CONFIG.letter_templates,
                 "url_pool": CONFIG.url_pool,

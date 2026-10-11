@@ -246,7 +246,7 @@ def applicant_gender_forms() -> dict:
             "consistency": "сохраняй последовательность",
             "ready": "готов(а)",
             "ready_title": "Готов(а)",
-            "default_questionnaire_answer": "Готов(а) рассказать подробнее на собеседовании.",
+            "default_questionnaire_answer": "Подробнее расскажу на собеседовании.",
         }
     return {
         "instruction": "Пиши от первого лица, женский род.",
@@ -259,7 +259,12 @@ def applicant_gender_forms() -> dict:
 
 
 def questionnaire_default_answer() -> str:
-    if CONFIG.questionnaire_default_answer == _BUILTIN_QUESTIONNAIRE_DEFAULT_ANSWER:
+    if CONFIG.questionnaire_default_answer in (
+        _BUILTIN_QUESTIONNAIRE_DEFAULT_ANSWER,
+        "Готов рассказать подробнее на собеседовании.",
+        "Готов(а) рассказать подробнее на собеседовании.",
+        "Подробнее расскажу на собеседовании.",
+    ):
         return applicant_gender_forms()["default_questionnaire_answer"]
     return CONFIG.questionnaire_default_answer
 

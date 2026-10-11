@@ -10,6 +10,70 @@ from app.config import CONFIG, questionnaire_default_answer
 from app.logging_utils import log_debug
 
 
+# Exact answers from the built-in UI presets. Older installations have already
+# saved these strings in config.json, so matching the whole answer keeps custom
+# wording untouched while making those presets follow the applicant's gender.
+_PRESET_NEUTRAL = {
+    "Да, готова к командировкам.": "Да, могу ездить в командировки.",
+    "Да, готова к переработкам при необходимости.": "Да, могу задерживаться при необходимости.",
+    "Да, готова работать в выходные при необходимости.": "Да, могу работать в выходные при необходимости.",
+    "Ответственный и целеустремлённый специалист с опытом работы. Быстро обучаюсь, умею работать в команде и самостоятельно. Готова к новым задачам и развитию.":
+        "Есть опыт работы. Быстро обучаюсь, умею работать в команде и самостоятельно. Интересуют новые задачи и развитие.",
+    "Имею опыт работы в данной сфере более 2 лет. Готова рассказать подробнее на собеседовании.":
+        "Имею опыт работы в данной сфере более 2 лет. Подробнее расскажу на собеседовании.",
+    "От 70 000 рублей. Готова обсудить на собеседовании.": "От 70 000 рублей. Можем обсудить на собеседовании.",
+    "Готова приступить в течение 2 недель.": "Могу приступить в течение 2 недель.",
+    "Готова рассмотреть предложение.": "Могу рассмотреть предложение.",
+    "Да, готова к обучению и развитию.": "Да, интересно обучение и развитие.",
+    "Да, готова.": "Да, могу.",
+    "Да, работала с CRM-системами и 1С.": "Да, есть опыт работы с CRM-системами и 1С.",
+    "Стрессоустойчива, умею работать со сложными клиентами и находить компромисс.":
+        "Умею работать со сложными клиентами, сохранять спокойствие и находить компромисс.",
+    "Готова приступить в течение недели.": "Могу приступить в течение недели.",
+    "Да, готова к обучению.": "Да, могу учиться.",
+    "В исключительных случаях готова.": "В исключительных случаях могу.",
+    "Уверенный пользователь MS Office: Word, Excel, Outlook.":
+        "Уверенно пользуюсь MS Office: Word, Excel, Outlook.",
+    "Да, при необходимости готова.": "Да, при необходимости могу.",
+    "Да, есть базовые знания. Готова развиваться.": "Да, есть базовые знания. Хочу развиваться.",
+    "Да, работала с Google-сервисами, Notion, Trello.":
+        "Да, есть опыт работы с Google-сервисами, Notion, Trello.",
+    "Да, готова к обучению за счёт компании.": "Да, могу пройти обучение за счёт компании.",
+}
+
+
+def _applicant_gender() -> str:
+    value = (getattr(CONFIG, "llm_applicant_gender", "") or "female").strip().lower()
+    if value in ("male", "m", "masculine", "мужской"):
+        return "male"
+    if value in ("neutral", "n", "неважно", "нейтральный"):
+        return "neutral"
+    return "female"
+
+
+def questionnaire_preset_previews() -> dict[str, str]:
+    """Current-gender display and send text for the original built-in presets."""
+    gender = _applicant_gender()
+    if gender == "neutral":
+        return _PRESET_NEUTRAL
+    if gender == "male":
+        return {
+            original: original.replace("Готова", "Готов").replace("готова", "готов")
+                .replace("работала", "работал").replace("Стрессоустойчива", "Стрессоустойчив")
+            for original in _PRESET_NEUTRAL
+        }
+    return {
+        original: original.replace("Ответственный и целеустремлённый специалист", "Ответственная и целеустремлённая специалистка")
+            .replace("Уверенный пользователь", "Уверенно пользуюсь")
+        for original in _PRESET_NEUTRAL
+    }
+
+
+def resolve_questionnaire_template_answer(answer: str) -> str:
+    """Inflect only exact built-in preset answers; custom answers stay literal."""
+    return questionnaire_preset_previews().get(answer, answer)
+
+
 def get_questionnaire_answer(question_text: str) -> str:
     """Найти подходящий шаблонный ответ по ключевым словам вопроса."""
     q_lower = question_text.lower()
@@ -18,7 +82,7 @@ def get_questionnaire_answer(question_text: str) -> str:
         if not keywords:
             continue
         if any(kw.lower() in q_lower for kw in keywords):
-            return tmpl["answer"]
+            return resolve_questionnaire_template_answer(tmpl["answer"])
     return questionnaire_default_answer()
 
 

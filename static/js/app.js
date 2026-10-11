@@ -1420,6 +1420,7 @@ function syncScheduleSettings(snap) {
                : 'female';
     gen.value = norm;
   }
+  qUpdateGenderPreview(snap);
   // Баннер «есть несохранённые черновики»: показываем когда auto_send выкл
   // и в llm_log есть незаотправленные записи. Чтобы юзер не пропустил что
   // бот сгенерил кучу ответов и сидит ждёт флипа.
@@ -8010,7 +8011,10 @@ function updateHeaderResumeStats(snap) {
 function qRenderTemplates(templates) {
   const list = document.getElementById('q-templates-list');
   list.innerHTML = '';
+  const previews = State.lastSnapshot?.config?.questionnaire_preset_previews || {};
   (templates || []).forEach((tmpl, i) => {
+    const rawAnswer = tmpl.answer || '';
+    const preview = previews[rawAnswer] || rawAnswer;
     const row = document.createElement('div');
     row.className = 'q-template-row';
     row.dataset.idx = i;
@@ -8020,10 +8024,36 @@ function qRenderTemplates(templates) {
       <input type="text" class="q-keywords-input" placeholder="${t('q_keywords_ph')}"
         value="${esc((tmpl.keywords || []).join(', '))}">
       <label>${t('q_answer_label')}</label>
-      <textarea class="q-answer-input" rows="3" placeholder="Ваш ответ...">${esc(tmpl.answer || '')}</textarea>
+      <textarea class="q-answer-input" rows="3" placeholder="Ваш ответ...">${esc(preview)}</textarea>
     `;
+    const answer = row.querySelector('.q-answer-input');
+    answer.dataset.rawAnswer = rawAnswer;
+    answer.dataset.previewAnswer = preview;
     list.appendChild(row);
   });
+}
+
+function qUpdateGenderPreview(snap) {
+  const previews = snap?.config?.questionnaire_preset_previews || {};
+  document.querySelectorAll('#q-templates-list .q-answer-input').forEach(answer => {
+    if (answer.value !== answer.dataset.previewAnswer) return; // user is editing
+    const raw = answer.dataset.rawAnswer || '';
+    const preview = previews[raw] || raw;
+    answer.value = preview;
+    answer.dataset.previewAnswer = preview;
+  });
+  const def = document.getElementById('q-default-answer');
+  if (def?.dataset.presetDefault === 'true') {
+    def.value = qBuiltinDefaultForGender(snap?.config?.llm_applicant_gender);
+  } else if (def && !def._userEdited && snap?.config?.questionnaire_default_answer) {
+    def.value = snap.config.questionnaire_default_answer;
+  }
+}
+
+function qBuiltinDefaultForGender(gender) {
+  if (gender === 'male') return 'Готов рассказать подробнее на собеседовании.';
+  if (gender === 'neutral') return 'Подробнее расскажу на собеседовании.';
+  return 'Готова рассказать подробнее на собеседовании.';
 }
 
 // ── Questionnaire presets ─────────────────────────────────────
@@ -8182,7 +8212,12 @@ function qLoadPreset(name) {
   if (!confirm(`Загрузить пресет "${name}"? Текущие шаблоны будут заменены.`)) return;
   qRenderTemplates(preset.templates);
   const defEl = document.getElementById('q-default-answer');
-  if (defEl) defEl.value = preset.default;
+  if (defEl) {
+    const gender = document.getElementById('cfg-llm-applicant-gender')?.value;
+    defEl.value = qBuiltinDefaultForGender(gender);
+    defEl._userEdited = true;
+    defEl.dataset.presetDefault = 'true';
+  }
   const st = document.getElementById('q-status');
   st.textContent = `✅ Пресет загружен (${preset.templates.length} шаблонов). Отредактируй и нажми «Сохранить».`;
   st.style.color = 'var(--yellow)';
@@ -8209,10 +8244,11 @@ function qReadTemplates() {
   const result = [];
   rows.forEach(row => {
     const kw = row.querySelector('.q-keywords-input')?.value || '';
-    const ans = row.querySelector('.q-answer-input')?.value || '';
+    const field = row.querySelector('.q-answer-input');
+    const ans = field?.value || '';
     result.push({
       keywords: kw.split(',').map(s => s.trim()).filter(Boolean),
-      answer: ans
+      answer: ans === field?.dataset.previewAnswer ? field.dataset.rawAnswer : ans
     });
   });
   return result;
@@ -8239,7 +8275,10 @@ function qSyncFromSnapshot(snap) {
 // Mark as user-edited so we don't override on next snapshot
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('q-default-answer');
-  if (el) el.addEventListener('input', () => { el._userEdited = true; });
+  if (el) el.addEventListener('input', () => {
+    el._userEdited = true;
+    el.dataset.presetDefault = '';
+  });
 });
 
 // ── Dark confirm dialog ──────────────────────────────────────────

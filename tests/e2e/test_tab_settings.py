@@ -272,6 +272,32 @@ def test_applicant_gender_three_levels_send_set_config(ui):
         _wait_set_config(ui, "llm_applicant_gender", value)
 
 
+def test_saved_questionnaire_preset_previews_gender_without_rewriting_source(ui):
+    original = "Да, работала с CRM-системами и 1С."
+    male = "Да, работал с CRM-системами и 1С."
+    neutral = "Да, есть опыт работы с CRM-системами и 1С."
+    page = _boot(ui, config={
+        "llm_applicant_gender": "male",
+        "questionnaire_templates": [{"keywords": ["crm"], "answer": original}],
+        "questionnaire_preset_previews": {original: male},
+    })
+    page.locator("#panel-settings summary", has_text="Шаблонные ответы на опросы").click()
+    answer = page.locator("#q-templates-list .q-answer-input")
+    expect(answer).to_have_value(male)
+    assert page.evaluate("qReadTemplates()[0].answer") == original
+
+    ui.state["config"]["llm_applicant_gender"] = "neutral"
+    ui.state["config"]["questionnaire_preset_previews"] = {original: neutral}
+    ui.push_state()
+    expect(answer).to_have_value(neutral)
+    assert page.evaluate("qReadTemplates()[0].answer") == original
+
+    answer.fill("Мой собственный ответ.")
+    ui.state["config"]["questionnaire_preset_previews"] = {original: male}
+    ui.push_state()
+    expect(answer).to_have_value("Мой собственный ответ.")
+
+
 # ── 7. applySettings(): все слайдеры одним кликом ──────────────────────────
 
 def test_apply_settings_sends_set_config_for_all_sliders(ui):
