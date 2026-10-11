@@ -70,7 +70,17 @@ jobs:
       - name: Build binary bundle
         run: python scripts/build_release.py --platform ${{ matrix.platform }}
       - name: Smoke test binary
-        run: python scripts/smoke_release.py --bundle build/release/hh-clicker
+        shell: bash
+        run: |
+          set +e
+          python scripts/smoke_release.py --bundle build/release/hh-clicker > smoke.log 2>&1
+          status=$?
+          cat smoke.log
+          if [ "$status" -ne 0 ]; then
+            details=$(tail -n 60 smoke.log | tr '\n' ' ' | cut -c1-6000)
+            echo "::error title=Binary smoke failure::$details"
+          fi
+          exit "$status"
       - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.platform }}
