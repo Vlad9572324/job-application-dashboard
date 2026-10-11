@@ -30,7 +30,8 @@ def main():
     subprocess.run([
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
         "--name", "hh-clicker", "--collect-submodules", "app",
-        "--collect-submodules", "uvicorn", "--distpath", str(OUT),
+        "--collect-submodules", "uvicorn", "--collect-data", "tzdata",
+        "--distpath", str(OUT),
         "--workpath", str(ROOT / "build" / "pyinstaller"),
         "--specpath", str(ROOT / "build"), str(ROOT / "web_app.py"),
     ], cwd=ROOT, check=True)
