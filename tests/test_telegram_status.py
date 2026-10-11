@@ -15,6 +15,10 @@ def manager(monkeypatch, tmp_path):
     monkeypatch.setattr(status.CONFIG, 'daily_apply_limit', 50)
     monkeypatch.setattr(status.CONFIG, 'hh_daily_limit', 200)
     monkeypatch.setattr(status.CONFIG, 'automation_paused', False)
+    monkeypatch.setattr(status.CONFIG, 'human_mode_enabled', False)
+    monkeypatch.setattr(status.CONFIG, 'fresh_vacancies_mode', False)
+    monkeypatch.setattr(status.CONFIG, 'prefer_hh_signals', False)
+    monkeypatch.setattr(status.CONFIG, 'captcha_llm_enabled', False)
     monkeypatch.setattr(status.storage, '_load_cache', lambda: None)
     now = datetime.now(status._MSK)
     monkeypatch.setattr(status.storage, '_cache_applied', {'Maria': {
@@ -38,7 +42,10 @@ def test_snapshot(manager):
     assert snapshot['accounts'] == [dict(short='Мария', state='🟢 работает',
         applied_today=1, daily_limit=50, hourly_rate=1.0,
         current_vacancy='Python Developer / Yandex', last_error='Ошибка запроса',
-        captcha_count=1, next_apply_sec=None, detail=None)]
+        captcha_count=1, next_apply_sec=None, detail=None, next_step=None,
+        wait_reason='', remaining_today=49, daily_used=1, fresh_only=False,
+        fresh_hours=None, fresh_reserve=0, prefer_hh_signals=False,
+        captcha_manual_required=False)]
     assert snapshot['totals'] == dict(applied_today=1, captcha_today=1, errors_today=1)
 
 
@@ -46,7 +53,7 @@ def test_html(manager):
     snapshot = status.build_status_snapshot(manager)
     html = status.build_status_html(snapshot)
     assert '1/50 (2%)' in html
-    assert '~1/час' in html
+    assert 'За последний час: 1' in html
     assert '<i>Python Developer / Yandex</i>' in html
     snapshot['accounts'][0]['short'] = '<script>&'
     assert '&lt;script&gt;&amp;' in status.build_status_html(snapshot)

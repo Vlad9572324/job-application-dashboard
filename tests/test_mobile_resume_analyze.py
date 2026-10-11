@@ -226,6 +226,24 @@ def test_mobile_analyze_resume_duties_400_rest_survives(oauth_token):
     assert result["grade"] == "Middle"
 
 
+@responses.activate
+def test_mobile_analyze_resume_paused_returns_partial_json(oauth_token):
+    from app.mobile_resume_analyze import analyze_resume
+
+    _add_all_mocks()
+    paused_acc = {**ACC, "_mutation_guard": lambda: False}
+
+    result = analyze_resume(paused_acc)
+
+    assert result["ok"] is True
+    assert result["partial"] is True
+    assert result["missing_skills"] == []
+    assert result["recommended_duties"] == []
+    assert result["subroles"] == []
+    assert [error["error"] for error in result["errors"]] == ["account_paused"] * 3
+    assert _called_urls() == [PATH_RESUME, PATH_PROFILE]
+
+
 # ---------------------------------------------------------------------------
 # 3. GET /resumes/{id}: 404 → resume_not_found; 401/500 → MobileAPIError.
 # ---------------------------------------------------------------------------

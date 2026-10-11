@@ -27,7 +27,70 @@ def test_conservative_defaults():
     assert (config.human_burst_size_min, config.human_burst_size_max) == (2, 4)
     assert (config.human_burst_pause_min_sec, config.human_burst_pause_max_sec) == (600, 1500)
     assert config.human_captcha_backoff_hours == 4
-    assert pace.TARGET_APPLIES_PER_HOUR == 4.0
+    assert pace.TARGET_APPLIES_PER_HOUR == 720.0
+
+
+@pytest.fixture
+def fast_pace(monkeypatch):
+    for name in ('human_apply_delay_min', 'human_apply_delay_max',
+                 'human_burst_pause_min_sec', 'human_burst_pause_max_sec'):
+        monkeypatch.setattr(CONFIG, name, 0)
+
+
+def test_fast_pace_keeps_five_second_slots_after_captcha_on_weekend(monkeypatch, fast_pace):
+    now = 200000
+    monkeypatch.setattr(pace.time, 'time', lambda: now)
+    monkeypatch.setattr(pace, 'datetime', SimpleNamespace(now=lambda tz: SimpleNamespace(weekday=lambda: 5)))
+    state = SimpleNamespace(acc={'user_id': 'fast', '_last_captcha_at': now - 10})
+    assert pace.uniform_interval() == 5
+    assert pace.post_captcha_rate_cut(state) == pace.weekend_variance() == 1
+    multiplier = pace.delay_multiplier(state)
+    assert multiplier == 1
+    assert pace.reserve_attempt(state.acc, now=now, multiplier=multiplier) == 0
+    assert pace.reserve_attempt(state.acc, now=now + 1, multiplier=multiplier) == 4
+    assert pace.reserve_attempt(state.acc, now=now + 5, multiplier=multiplier) == 0
+
+
+def test_fast_pace_skips_synthetic_waits_and_preserves_retry_after(monkeypatch, rng, fast_pace):
+    rng.random.return_value = 0  # Would otherwise take each extra-delay branch.
+    get, wait = Mock(), Mock()
+    monkeypatch.setattr(pace.HH, 'get', get)
+    assert pace.random_apply_delay() == 0
+    assert pace.account_start_jitter() == 0
+    assert pace.random_burst_pause() == 0
+    assert pace.long_idle_burst() is None
+    pace.warm_up_read_vacancy({'user_id': 'fast', '_human_wait': wait}, '123')
+    get.assert_not_called()
+    wait.assert_not_called()
+    rng.random.assert_not_called()
+    assert pace.respect_retry_after({'Retry-After': '87'}) == 87
+
+
+def test_fast_pace_captcha_cooldown_remains_five_seconds(monkeypatch, fast_pace):
+    monkeypatch.setattr(pace.time, 'time', lambda: 10000)
+    assert pace.post_captcha_cooldown_sec() == 5
+    assert pace.captcha_cooldown_remaining(SimpleNamespace(acc={'_last_captcha_at': 9998})) == 3
+    assert pace.captcha_cooldown_remaining(SimpleNamespace(acc={'_last_captcha_at': 9995})) == 0
+
+
+@pytest.mark.parametrize('minimum,maximum', [(600, 1500), (600, 0), (0, 1500)])
+def test_fast_pace_requires_both_burst_pauses_disabled(monkeypatch, minimum, maximum):
+    monkeypatch.setattr(CONFIG, 'human_burst_pause_min_sec', minimum)
+    monkeypatch.setattr(CONFIG, 'human_burst_pause_max_sec', maximum)
+    assert not pace.is_fast_pace()
+    assert pace.post_captcha_cooldown_sec() == 1800
+
+
+def test_fast_pace_still_respects_configured_interval(monkeypatch, fast_pace):
+    monkeypatch.setattr(CONFIG, 'human_apply_delay_max', 20)
+    assert pace.uniform_interval() == 20
+
+
+def test_fast_pace_recalculates_previously_saved_long_wait(fast_pace):
+    pace.PACE_FILE.write_text('{"fast": {"reserved_at": 1000, "next_at": 1086}}')
+    assert pace.reserve_attempt({'user_id': 'fast'}, now=1001) == 4
+    assert pace._pace_read()['fast']['next_at'] == 1005
+    assert pace.reserve_attempt({'user_id': 'fast'}, now=1005) == 0
 
 
 @pytest.mark.parametrize('draw,expected', [(0, True), (.299999, True), (.3, False), (.99999, False)])
@@ -143,7 +206,7 @@ def test_captcha_and_weekend_cut_extend_saved_interval(monkeypatch):
     assert pace.delay_multiplier(state) == pytest.approx(3 / .7)
     assert pace.reserve_attempt(state.acc, now=1000) == 0
     remaining = pace.reserve_attempt(state.acc, now=1100, multiplier=pace.delay_multiplier(state))
-    assert remaining == pytest.approx(3600 / pace.TARGET_APPLIES_PER_HOUR * 3 / .7 - 100)
+    assert remaining == pytest.approx(pace.uniform_interval() * 3 / .7 - 100)
 
 
 @pytest.mark.parametrize('value,expected', [('0', 0), (' 123 ', 123), ('-5', 60), ('1.5', 60), ('invalid', 60), ('', 60)])

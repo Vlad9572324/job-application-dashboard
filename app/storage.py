@@ -637,6 +637,17 @@ def is_test(vacancy_id: str) -> bool:
         return vacancy_id in _cache_tests
 
 
+def get_test_vacancy_stats() -> dict:
+    """Count unique known test vacancies and unique test vacancies applied to."""
+    _load_cache()
+    with _cache_lock:
+        test_ids = set(_cache_tests or {})
+        applied_test_ids = set()
+        for vacancies in (_cache_applied or {}).values():
+            applied_test_ids.update(test_ids.intersection(vacancies))
+    return {"found": len(test_ids), "applied": len(applied_test_ids)}
+
+
 def get_stats() -> dict:
     _load_cache()
     with _cache_lock:

@@ -92,8 +92,8 @@ def _aux_request(acc: dict, label: str, method: str, path: str, errors=None, **k
     try:
         return mobile_request(acc, method, path, **kwargs)
     except MutationBlocked:
-        # POST-эндпоинты аудита только читают ML-подсказки, но транспорт
-        # считает любой POST мутацией: на паузе аккаунта часть пустая, без 500.
+        # The POST prediction endpoints only read suggestions, but the shared
+        # transport guards every POST while an account is paused.
         log_debug(f"mobile analyze_resume {label}: аккаунт на паузе — часть результата пустая")
         if errors is not None:
             errors.append({"endpoint": label, "error": "account_paused"})

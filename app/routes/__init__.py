@@ -233,6 +233,7 @@ from app.routes.mobile_auth import router as mobile_auth_router  # noqa: E402
 from app.routes.auto_response import router as auto_response_router  # noqa: E402
 from app.routes.career_visibility import router as career_visibility_router  # noqa: E402
 from app.routes.discovery import router as discovery_router  # noqa: E402
+from app.routes.captcha_models import router as captcha_models_router  # noqa: E402
 
 app.include_router(core_router)
 app.include_router(accounts_router)
@@ -257,6 +258,9 @@ app.include_router(mobile_auth_router)
 app.include_router(auto_response_router)
 app.include_router(career_visibility_router)
 app.include_router(discovery_router)
+app.include_router(captcha_models_router)
+from app.routes.questionnaire_trace import router as questionnaire_trace_router
+app.include_router(questionnaire_trace_router)
 
 
 @app.post('/api/telegram/test')

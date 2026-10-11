@@ -7,6 +7,11 @@ backups/
 .env.*
 !.env.example
 
+# Веса и алфавит поступают через bind mount, не через Docker image.
+/models/**
+!/models/captcha/
+!/models/captcha/README.md
+
 # Local reverse-engineering and diagnostic artefacts.
 probe_*.py
 apks/
@@ -17,6 +22,9 @@ apks/
 
 # Local tooling / VCS.
 .git/
+.github/
 .venv/
+build/
+dist/
 __pycache__/
 *.pyc

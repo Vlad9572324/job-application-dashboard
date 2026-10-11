@@ -1,8 +1,7 @@
 # HH Bot Dashboard
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-39d0d8?style=flat-square)](https://www.python.org)
-[![Tests](https://img.shields.io/badge/tests-1010_total-39d0d8?style=flat-square)](tests/)
-[![Passed](https://img.shields.io/badge/passed-1010-3fb950?style=flat-square)](tests/)
+[![CI](https://github.com/Vlad9572324/hh.ru-clicker/actions/workflows/ci-release.yml/badge.svg)](https://github.com/Vlad9572324/hh.ru-clicker/actions/workflows/ci-release.yml)
 [![Clients](https://img.shields.io/badge/HH-web%20%7C%20mobile%20%7C%20auto-b967ff?style=flat-square)](app/hh_client_factory.py)
 [![WebSocket](https://img.shields.io/badge/realtime-WebSocket-00f0ff?style=flat-square)](app/ws_client.py)
 
@@ -84,8 +83,13 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 pytest -q
 ```
 
-Для этой ревизии: **1010 collected**, **1010 passed**. Актуальный
-итог всегда проверяйте локальным `pytest -q`.
+Актуальный результат показывает CI и локальный запуск `pytest -q`.
+
+## Релизы
+
+CI проверяет PR и `main`. После публикации тега `vX.Y.Z` workflow собирает
+бинарники Linux и Windows, Docker-образ в GHCR и GitHub Release. Порядок
+публикации и запуска: [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Документация
 

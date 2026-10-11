@@ -744,6 +744,34 @@ textarea.apply-q-answer:focus { outline: none; border-color: var(--cyan); }
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
 .confirm-box p { margin-bottom: 18px; line-height: 1.5; white-space: pre-line; }
+
+/* Read-only saved captcha attempts. */
+.captcha-history-launch { margin: 8px 0; }
+.captcha-history-overlay { padding: 14px; }
+.captcha-history-box {
+  width: min(800px, 100%);
+  max-width: 800px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+.captcha-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.captcha-history-heading h2 { font-size: 16px; color: var(--cyan); }
+.captcha-history-actions { display: flex; gap: 8px; }
+.captcha-history-note { color: var(--dim); font-size: 11px; line-height: 1.5; }
+.captcha-history-status { margin: 10px 0; font-size: 12px; }
+.captcha-history-list { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+.captcha-history-item { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 14px; padding: 14px 0; border-top: 1px solid var(--border); }
+.captcha-history-visual { align-self: start; font-size: 11px; color: var(--dim); }
+.captcha-history-visual img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 4px; background: #fff; }
+.captcha-history-details { line-height: 1.6; overflow-wrap: anywhere; }
+.captcha-history-outcome { display: block; margin-bottom: 3px; }
+.captcha-history-answer { font-size: 15px; white-space: pre-wrap; }
+@media (max-width: 520px) {
+  .captcha-history-box { padding: 16px; }
+  .captcha-history-item { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+}
 .confirm-btns { display: flex; gap: 10px; justify-content: flex-end; }
 .confirm-ok { background: var(--red); color: #fff; border: none; padding: 7px 20px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 13px; }
 .confirm-ok:hover { opacity: 0.85; }

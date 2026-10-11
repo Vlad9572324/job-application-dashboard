@@ -81,11 +81,33 @@ def test_read_only_probe_preserves_pause_and_throttles(monkeypatch):
     monkeypatch.setattr(oauth, '_token_key', lambda acc: 'synthetic')
     get = Mock(return_value=Mock(status_code=200, json=lambda: {}))
     monkeypatch.setattr(accounts.HH, 'get', get)
-    assert asyncio.run(accounts.api_account_captcha_refresh(0))['ok']
+    result = asyncio.run(accounts.api_account_captcha_refresh(0))
+    assert result['ok'] and result['probe_status'] == 200
+    assert not result['challenge_received'] and not result['challenge_replaced']
     assert state.paused and state.paused_reason == 'challenge'
     assert not asyncio.run(accounts.api_account_captcha_refresh(0))['ok']
     get.assert_called_once()
     assert get.call_args.args == ('https://api.hh.ru/me',)
+
+
+def test_probe_response_cannot_overwrite_newer_challenge(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from app.routes import accounts
+    acc = {'user_id': 'probe-race'}
+    captcha.hold(acc, {'captcha_url': 'https://hh.ru/account/captcha?state=old'})
+    state = SimpleNamespace(acc=acc, _state_lock=threading.RLock(),
+                            _deleted=False, paused=True, paused_reason='challenge')
+    monkeypatch.setattr(accounts.bot, '_get_apply_state', lambda idx: state)
+    monkeypatch.setattr(oauth, '_oauth_headers', lambda acc: {'Authorization': 'synthetic'})
+    monkeypatch.setattr(oauth, '_token_key', lambda acc: 'synthetic')
+    def response(*args, **kwargs):
+        captcha.hold(acc, {'captcha_url': 'https://hh.ru/account/captcha?state=newest'})
+        return Mock(status_code=403, json=lambda: PAYLOAD)
+    monkeypatch.setattr(accounts.HH, 'get', response)
+    assert not asyncio.run(accounts.api_account_captcha_refresh(0))['ok']
+    assert captcha.current(acc)['captcha_url'].endswith('state=newest')
+    assert state.paused
 
 
 def test_oauth_batch_has_immediate_challenge_break():

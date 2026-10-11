@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HH Bot Dashboard</title>
-<link rel="stylesheet" href="/static/css/style.css?v=state-readable-4">
+<link rel="stylesheet" href="/static/css/style.css?v=captcha-history-1">
 <link rel="stylesheet" href="/static/css/theme-autoclicker.css">
 <!-- UI integrations (feat1..feat8) -->
 <link rel="stylesheet" href="/static/css/features/feat1_hr_badge.css">
@@ -49,6 +49,7 @@
   <div class="tab" data-tab="log" data-i18n="tab_log">📜 Лог</div>
   <div class="tab" data-tab="applied" data-i18n="tab_applied">✅ Отклики</div>
   <div class="tab" data-tab="tests" data-i18n="tab_tests">🧪 Тесты</div>
+  <div class="tab" data-tab="questionnaire-history" data-i18n="tab_questionnaire_history">🧾 История тестовых откликов</div>
   <div class="tab" data-tab="db" data-i18n="tab_db">📂 База</div>
   <div class="tab" data-tab="hh" data-i18n="tab_hh">🎯 HH Статус</div>
   <div class="tab" data-tab="views" data-i18n="tab_views">👁️ Просмотры</div>
@@ -188,6 +189,38 @@
       </tr></thead>
       <tbody id="tests-tbody"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- Questionnaire History Tab -->
+<div id="panel-questionnaire-history" class="panel" style="padding:16px">
+  <div class="applied-header">
+    <div style="font-size:14px;font-weight:700">🧾 История откликов на вакансии с тестом <span id="questionnaire-history-count" class="c-dim"></span></div>
+    <button class="btn-refresh" type="button" onclick="loadQuestionnaireHistory()">↻ Обновить</button>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0" aria-label="Статистика вакансий с тестами">
+    <div style="border:1px solid var(--border);border-radius:8px;padding:10px 14px;background:var(--bg-card2);min-width:180px">
+      <div class="c-dim" style="font-size:11px">Найдено вакансий с тестом</div>
+      <strong id="questionnaire-tests-found" style="font-size:24px">—</strong>
+    </div>
+    <div style="border:1px solid var(--border);border-radius:8px;padding:10px 14px;background:var(--bg-card2);min-width:180px">
+      <div class="c-dim" style="font-size:11px">С подтверждённым откликом</div>
+      <strong id="questionnaire-tests-applied" class="c-green" style="font-size:24px">—</strong>
+    </div>
+  </div>
+  <p class="c-dim" style="font-size:11px;margin:0 0 8px">Счётчики считают уникальные вакансии из базы тестов; несколько откликов на одну вакансию учитываются один раз.</p>
+  <div style="border:1px solid var(--border);border-radius:8px;padding:10px 14px;background:var(--bg-card2);margin:8px 0 14px">
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
+      <input type="checkbox" id="questionnaire-history-check-claims" style="accent-color:var(--yellow)"
+             onchange="setQuestionnaireClaimsCheck(this.checked)">
+      Проверять факты в ответах LLM перед откликом
+    </label>
+    <div class="c-dim" style="font-size:11px;margin:5px 0 0 24px">Выключено — ответы проходят без проверки зарплаты, опыта и сроков. Настройка общая с разделом LLM; проверка рода остаётся включённой.</div>
+  </div>
+  <p class="c-dim" style="font-size:12px;margin:8px 0 14px">Здесь показаны отклики, для которых сохранена трасса анкеты. «Отправлен» означает подтверждённый результат HH; «отправка начата» без подтверждения требует проверки в HH.</p>
+  <div id="questionnaire-history-list" aria-live="polite">Загрузка…</div>
+  <div id="questionnaire-history-more" style="display:none;text-align:center;margin:12px">
+    <button class="btn-refresh" type="button" onclick="loadMoreQuestionnaireHistory()">Показать ещё</button>
   </div>
 </div>
 
@@ -511,10 +544,43 @@
 <!-- Settings Tab -->
 <div id="panel-settings" class="panel">
   <div id="settings-panel">
+    <section class="q-section" style="border-color:var(--cyan)">
+      <h3>🗣️ Род соискателя во всех автоответах</h3>
+      <label for="cfg-llm-applicant-gender" style="display:block;margin-bottom:6px">Грамматический род</label>
+      <select id="cfg-llm-applicant-gender" class="apply-input" style="max-width:420px"
+        onchange="sendCmd({type:'set_config',key:'llm_applicant_gender',value:this.value})">
+        <option value="female">Женский — готова, работала</option>
+        <option value="male">Мужской — готов, работал</option>
+        <option value="neutral">Нейтральный — без указания рода</option>
+      </select>
+      <div style="font-size:11px;color:var(--dim);margin-top:6px">Применяется к ответам LLM, анкетам, сообщениям HR и письмам. Если текст содержит явную форму другого рода, автоматическая отправка останавливается и причина записывается в лог.</div>
+    </section>
     <section class="q-section">
       <h3>🔐 Капча HH</h3>
-      <label><input id="captcha-llm-enabled" type="checkbox" checked onchange="saveCaptchaLLM(this)"> 🤖 Пробовать решать LLM автоматически (перед TG)</label>
-      <div id="captcha-llm-stats">За запуск: решено LLM — 0 / передано юзеру — 0</div>
+      <label for="captcha-solve-mode">Способ решения капчи</label>
+      <select id="captcha-solve-mode" class="apply-input" onchange="saveCaptchaMode(this)">
+        <option value="local">🤖 Локальная модель — решать автоматически</option>
+        <option value="manual">✍️ Ручной ввод — показать картинку</option>
+      </select>
+      <div id="captcha-mode-hint" style="font-size:11px;color:var(--dim);margin-top:5px"></div>
+      <div id="captcha-mode-result" role="status" style="font-size:11px;margin:5px 0 10px"></div>
+      <div style="margin:10px 0;padding:12px;border:1px solid var(--border);border-radius:8px">
+        <label for="captcha-model-select">Активная модель капчи</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="captcha-model-select" class="apply-input" style="min-width:180px"></select>
+          <button type="button" onclick="selectCaptchaModel()">Выбрать модель</button>
+        </div>
+        <div id="captcha-model-installed" role="status" style="font-size:12px;margin-top:8px">Проверяю загруженные модели…</div>
+        <div style="font-size:11px;color:var(--dim);margin:8px 0">Загрузите веса .pt и, если алфавит отличается, charset.txt. Файлы хранятся локально в models/captcha/ и не отправляются в Git.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="captcha-model-name" class="apply-input" placeholder="Имя модели, например v2" maxlength="48" style="min-width:180px">
+          <input id="captcha-model-weights" type="file" accept=".pt" aria-label="Веса модели .pt">
+          <input id="captcha-model-charset" type="file" accept=".txt" aria-label="Алфавит charset.txt (необязательно)">
+          <button type="button" onclick="uploadCaptchaModel()">Загрузить модель</button>
+        </div>
+        <div id="captcha-model-result" role="status" style="font-size:11px;margin-top:8px"></div>
+      </div>
+      <div id="captcha-llm-stats">За запуск: решено автоматически — 0 / передано юзеру — 0</div>
       <label>TG bot token <input id="tg-token" type="password" autocomplete="new-password" placeholder="Оставьте пустым, чтобы сохранить"></label>
       <label>TG chat ID <input id="tg-chat" type="text" placeholder="Например, -100123456789"></label>
       <label><input id="tg-enabled" type="checkbox" checked> Включено</label>
@@ -781,20 +847,6 @@
               onchange="sendCmd({type:'set_config',key:'hh_region',value:this.value.trim().toLowerCase()})"><span style="color:var(--dim);font-family:monospace">.hh.ru</span>
           </label>
           <span style="font-size:11px;color:var(--dim)">по умолчанию пусто → главный hh.ru. Пример: <code>syktyvkar</code>, <code>moscow</code>, <code>vologda</code>. OAuth и chatik всегда на основном.</span>
-        </div>
-        <div style="border-top:1px solid var(--border);margin:12px 0"></div>
-        <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">Род соискателя для LLM-ответов</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-          <label style="font-size:12px">Грамматический род:&nbsp;
-            <select id="cfg-llm-applicant-gender"
-              style="font-family:inherit;font-size:12px;padding:2px 6px;background:var(--bg-card2);color:var(--text);border:1px solid var(--border);border-radius:3px"
-              onchange="sendCmd({type:'set_config',key:'llm_applicant_gender',value:this.value})">
-              <option value="female">Женский (откликнулась, готова, последовательна)</option>
-              <option value="male">Мужской (откликнулся, готов, последователен)</option>
-              <option value="neutral">Нейтральный (готов(а), без склонения)</option>
-            </select>
-          </label>
-          <span style="font-size:11px;color:var(--dim)">Подставляется в системный промпт LLM и дефолтный ответ опросника. Кастомные шаблоны не затрагиваются.</span>
         </div>
         <div style="border-top:1px solid var(--border);margin:12px 0"></div>
         <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">Умный поиск</div>
@@ -1074,6 +1126,14 @@
         <div style="font-size:11px;color:var(--dim);margin-top:4px;margin-left:22px">
           Если включено — LLM сам отвечает на вопросы работодателя при отклике. Шаблоны используются как запасной вариант.
         </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;margin:8px 0 0 22px">
+          <input type="checkbox" id="llm-check-questionnaire-claims" style="accent-color:var(--yellow)" checked
+                 onchange="setQuestionnaireClaimsCheck(this.checked)">
+          Проверять факты в ответах по резюме и промпту
+        </label>
+        <div style="font-size:11px;color:var(--dim);margin-top:4px;margin-left:44px">
+          Если выключено — ответы LLM проходят без проверки зарплаты, опыта и сроков. Проверка рода остаётся включённой.
+        </div>
       </div>
       <div style="margin-bottom:12px">
         <div style="font-size:11px;color:var(--dim);margin-bottom:6px">
@@ -1181,7 +1241,7 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=captcha-llm-card"></script>
+<script src="/static/js/app.js?v=questionnaire-history-3"></script>
 <script src="/static/js/features/hedi.js?v=1"></script>
 <script src="/static/js/features/job_status.js?v=1"></script>
 <script src="/static/js/features/skills.js?v=1"></script>

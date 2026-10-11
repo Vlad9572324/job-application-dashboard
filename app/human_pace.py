@@ -21,8 +21,8 @@ from app.user_agent import webview_user_agent
 _rng = random.Random()
 _MSK = ZoneInfo('Europe/Moscow')
 
-# About 68 attempts across the default 17-hour weekday window, before pauses.
-TARGET_APPLIES_PER_HOUR = 4.0
+# Five-second per-account minimum; configured delays can make this slower.
+TARGET_APPLIES_PER_HOUR = 720.0
 PACE_FILE = Path('data/apply_pace.json')
 _pace_lock = threading.RLock()
 
@@ -98,7 +98,14 @@ def _bounds(low, high, minimum=0):
     return sorted((max(minimum, low), max(minimum, high)))
 
 
+def is_fast_pace() -> bool:
+    """Zero burst pauses select the configured pace without synthetic waits."""
+    return CONFIG.human_burst_pause_min_sec == CONFIG.human_burst_pause_max_sec == 0
+
+
 def random_apply_delay() -> float:
+    if is_fast_pace():
+        return 0
     if _rng.random() < 0.1:
         return _rng.uniform(30, 60)
     low, high = _bounds(CONFIG.human_apply_delay_min, CONFIG.human_apply_delay_max)
@@ -119,7 +126,7 @@ def warm_up_read_vacancy(acc, vacancy_id) -> None:
     The worker supplies an interruptible wait; standalone callers use sleep.
     Neither the GET result nor a network failure is needed to finish the wait.
     """
-    if _rng.random() >= 0.3:
+    if is_fast_pace() or _rng.random() >= 0.3:
         return
     allowed = acc.get('_mutation_guard', lambda: True)
     if not allowed():
@@ -162,11 +169,13 @@ def random_skip_vacancy() -> bool:
 
 
 def long_idle_burst() -> float | None:
+    if is_fast_pace():
+        return None
     return _rng.uniform(1800, 3600) if _rng.random() < 0.1 else None
 
 
 def post_captcha_cooldown_sec() -> int:
-    return 1800
+    return 5 if is_fast_pace() else 1800
 
 
 def _last_captcha_at(state):
@@ -180,6 +189,8 @@ def captcha_cooldown_remaining(state) -> float:
 
 
 def post_captcha_rate_cut(state) -> float:
+    if is_fast_pace():
+        return 1.0
     last = _last_captcha_at(state)
     age = time.time() - last
     if not last or age < 0:
@@ -190,7 +201,7 @@ def post_captcha_rate_cut(state) -> float:
 
 
 def account_start_jitter() -> float:
-    return _rng.uniform(0, 300)
+    return 0 if is_fast_pace() else _rng.uniform(0, 300)
 
 
 def respect_retry_after(headers, default_sec=0) -> int:
@@ -271,9 +282,13 @@ def adaptive_backoff_multiplier(state) -> float:
 
 
 def weekend_variance() -> float:
+    if is_fast_pace():
+        return 1.0
     return 0.7 if datetime.now(_MSK).weekday() >= 5 else 1.0
 
 
 def delay_multiplier(state) -> float:
     """0.7 activity means longer delays, not 30% faster requests."""
+    if is_fast_pace():
+        return 1.0
     return post_captcha_rate_cut(state) / weekend_variance()

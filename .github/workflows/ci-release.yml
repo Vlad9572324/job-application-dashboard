@@ -1,0 +1,145 @@
+name: CI and release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python and GUI tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m playwright install --with-deps chromium
+      - name: Run tests
+        run: python -m pytest -q
+
+  binary:
+    name: Build ${{ matrix.platform }} binary
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux-x64
+            archive: hh-clicker-linux-x64.tar.gz
+          - runner: windows-latest
+            platform: windows-x64
+            archive: hh-clicker-windows-x64.zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install Linux binary tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y binutils
+      - name: Install build dependencies
+        run: |
+          python -m pip install -r requirements.txt "pyinstaller>=6.16,<7"
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Build binary bundle
+        run: python scripts/build_release.py --platform ${{ matrix.platform }}
+      - name: Smoke test binary
+        run: python scripts/smoke_release.py --bundle build/release/hh-clicker
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.platform }}
+          path: build/release/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish Docker and binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, binary]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check release tag
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "Expected a version tag such as v1.2.3 or v1.2.3-rc.1" >&2
+            exit 1
+          }
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Release tag must point to a commit on main" >&2
+            exit 1
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: release-assets
+          merge-multiple: true
+      - name: Check binary assets
+        shell: bash
+        run: |
+          test -s release-assets/hh-clicker-linux-x64.tar.gz
+          test -s release-assets/hh-clicker-windows-x64.zip
+          (cd release-assets && sha256sum hh-clicker-linux-x64.tar.gz hh-clicker-windows-x64.zip > SHA256SUMS.txt)
+      - name: Set image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            args=(--verify-tag --generate-notes)
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then args+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" "${args[@]}" release-assets/*
+          fi

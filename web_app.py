@@ -2,6 +2,12 @@
 import os
 import signal
 import sys
+from pathlib import Path
+
+# A frozen release keeps mutable data, CAPTCHA weights and bundled static files
+# beside the executable. Source and Docker runs retain their current paths.
+if getattr(sys, "frozen", False):
+    os.chdir(Path(sys.executable).resolve().parent)
 
 from app.routes import app
 import uvicorn

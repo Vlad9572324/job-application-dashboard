@@ -141,6 +141,7 @@ class Config:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     captcha_llm_enabled: bool = True
+    captcha_model_name: str = "default"
     captcha_llm_solved: int = 0
     captcha_llm_forwarded: int = 0
     telegram_status_enabled: bool = True
@@ -180,6 +181,7 @@ class Config:
     fresh_vacancy_hours: int = 24       # возраст вакансии для категории «свежая»
     fresh_apply_reserve: int = 50       # сколько последних откликов не тратить на старые
     llm_fill_questionnaire: bool = False  # Использовать LLM для заполнения опросников
+    llm_check_questionnaire_claims: bool = True  # Останавливать неподтверждённые утверждения LLM
     llm_check_interval: int = 5  # Интервал проверки чатов LLM (в минутах, мин 2)
     llm_ws_push_enabled: bool = True  # Подписаться на wss://websocket.hh.ru для мгновенных ответов
     chat_use_oauth: bool = False  # Сначала пробовать официальный OAuth-путь POST /common/chats/{id}/messages,
@@ -211,9 +213,9 @@ class Config:
             "text": (
                 "Здравствуйте!\n\n"
                 "Я выражаю искренний интерес к возможности присоединиться к вашей компании.\n\n"
-                "Я ознакомился с деятельностью вашей организации и уверен, что мой опыт и навыки "
+                "Деятельность вашей организации мне интересна. Считаю, что мой опыт и навыки "
                 "смогут внести вклад в вашу команду.\n\n"
-                "Хочу отметить, что я всегда готов обучаться новому и развиваться в профессиональном плане.\n\n"
+                "Хочу учиться новому и развиваться в профессиональном плане.\n\n"
                 "Считаю, что ваша компания предоставляет отличные возможности для роста и "
                 "самосовершенствования, и мне бы хотелось стать частью вашей команды.\n\n"
                 "С уважением,\n[ИМЯ]\n[t.me: @username]\n[📞 телефон]"
@@ -250,7 +252,7 @@ def applicant_gender_forms() -> dict:
         }
     return {
         "instruction": "Пиши от первого лица, женский род.",
-        "responded": "соискатель откликнулась",
+            "responded": "соискательница откликнулась",
         "consistency": "будь последовательна",
         "ready": "готова",
         "ready_title": "Готова",
@@ -327,7 +329,7 @@ _CONFIG_KEYS = [
     "captcha_llm_enabled",
     "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles", "remote_it_only",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",
-    "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",
+    "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire", "llm_check_questionnaire_claims",
     "skip_inconsistent", "use_oauth_apply", "auto_pick_resume", "default_client_mode", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
     "min_employer_rating", "min_employer_reviews", "min_recommendations_percent",
@@ -398,6 +400,7 @@ def config_snapshot() -> dict:
     только namespaced-секцию ``mobile_auth``.
     """
     data = {k: getattr(CONFIG, k) for k in _CONFIG_KEYS}
+    data["captcha_model_name"] = CONFIG.captcha_model_name
     data["questionnaire_templates"] = CONFIG.questionnaire_templates
     data["letter_templates"] = CONFIG.letter_templates
     data["allowed_schedules"] = CONFIG.allowed_schedules
@@ -472,6 +475,10 @@ def load_config():
                     setattr(CONFIG, k, _coerce_config_value(k, data[k]))
                 except (ValueError, TypeError):
                     log_debug(f"⚠️ Невалидное значение конфига {k}={data[k]!r}, пропуск")
+        if isinstance(data.get("captcha_model_name"), str):
+            from app.captcha_models import model_exists
+            if model_exists(data["captcha_model_name"]):
+                CONFIG.captcha_model_name = data["captcha_model_name"]
         if "questionnaire_templates" in data and isinstance(data["questionnaire_templates"], list):
             CONFIG.questionnaire_templates = data["questionnaire_templates"]
         if "letter_templates" in data and isinstance(data["letter_templates"], list):

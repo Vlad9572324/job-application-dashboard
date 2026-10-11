@@ -8,6 +8,11 @@ images/[0-9][0-9]-*.png
 .env.*
 !.env.example
 
+# Локальные файлы моделей: README оставляем в репозитории.
+/models/**
+!/models/captcha/
+!/models/captcha/README.md
+
 # Экспорты аккаунтов / авторизации (в любом подкаталоге)
 **/accounts.json
 **/browser_sessions.json

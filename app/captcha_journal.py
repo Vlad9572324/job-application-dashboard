@@ -63,17 +63,19 @@ def save_sample(image, answer, kind="", source=""):
         folder.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc)
         name = f"{now.strftime('%Y%m%dT%H%M%S')}_{kind + '_' if kind else ''}{text}.png"
-        target = folder / name
-        n = 1
-        while target.exists():  # two captchas in one second must not overwrite each other
-            target = folder / name.replace(".png", f"_{n}.png")
-            n += 1
-        target.write_bytes(image)
-        if not kind:
-            entry = {"t": now.isoformat(timespec="seconds"), "file": target.name,
-                     "answer": str(answer).strip(), "source": source or None}
-            with _LOCK, open(folder / "labels.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        with _LOCK:
+            target = folder / name
+            n = 1
+            while target.exists():  # concurrent images must not overwrite each other
+                target = folder / name.replace(".png", f"_{n}.png")
+                n += 1
+            target.write_bytes(image)
+            if not kind:
+                entry = {"t": now.isoformat(timespec="seconds"), "file": target.name,
+                         "answer": str(answer).strip(), "source": source or None}
+                with open(folder / "labels.jsonl", "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return target.name
     except Exception as exc:
         log_debug(f"captcha sample: {type(exc).__name__}")
 
@@ -117,12 +119,12 @@ _week_cache = {"at": 0.0, "value": None}
 
 
 def llm_week() -> dict:
-    """Cheap 7-day LLM captcha stats for the live snapshot (cached 60s)."""
+    """7-day automatic captcha stats (legacy keys kept for existing clients)."""
     import time
     if _week_cache["value"] is not None and time.monotonic() - _week_cache["at"] < 60:
         return _week_cache["value"]
     events = _load(7)
-    llm = [e for e in events if e["event"] == "solve" and e.get("path") == "llm"]
+    llm = [e for e in events if e["event"] == "solve" and e.get("path") in ('llm', 'local')]
     value = {"challenges": sum(e["event"] == "challenge" for e in events),
              "llm_attempts": len(llm), "llm_solved": sum(bool(e.get("ok")) for e in llm)}
     _week_cache.update(at=time.monotonic(), value=value)

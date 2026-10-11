@@ -4,6 +4,25 @@ import pytest
 from app import captcha_solver as solver
 
 
+def test_submit_rate_limit_takes_priority_over_captcha_error_and_keeps_retry_after():
+    session = Mock()
+    session.post.return_value = Mock(status_code=429, headers={'Retry-After': '180'},
+                                    json=lambda: {'hhcaptcha': {'isBot': True}})
+    assert solver.submit_captcha(session, 'text', 'key', 'state', require_confirmation=True) == (False, 'http_429')
+    assert session.hh_captcha_retry_after == 180
+
+
+def test_fetch_rate_limit_keeps_retry_after_and_closes_session(monkeypatch):
+    session = Mock()
+    session.get.return_value = Mock(status_code=429, headers={'Retry-After': '240'})
+    monkeypatch.setattr(solver, '_make_session', lambda: session)
+    monkeypatch.setattr(solver, 'egress_proxies', lambda: {})
+    with pytest.raises(ValueError, match='prime_http_429') as exc:
+        solver.fetch_captcha_image({}, 'https://hh.ru/account/captcha?state=test')
+    assert exc.value.retry_after == 240
+    session.close.assert_called_once()
+
+
 def _fake_session(prime_status=200, xsrf='xsrf-token-123', post_status=200,
                   key_body=None, image_status=200, image=b'\x89PNG_ok'):
     """Build a Mock imitating requests.Session with cookie jar."""
@@ -104,3 +123,68 @@ def test_diagnostic_contains_only_safe_metadata(monkeypatch):
     assert session.hh_captcha_diagnostic == {'http_status': 200, 'format': 'json',
         'hhcaptcha_isBot': False, 'redirect_present': False}
     assert logs and 'PRIVATE' not in str(logs)
+
+
+@pytest.mark.parametrize('next_state,changed', [
+    ('PRIVATE_FRESH_STATE', True), ('PRIVATE_ORIGINAL_STATE', False),
+])
+def test_rejection_captures_next_state_and_logs_only_safe_flags(monkeypatch, next_state, changed):
+    from app import logging_utils
+    logs = []
+    monkeypatch.setattr(logging_utils, 'log_debug', logs.append)
+    session = Mock()
+    session.cookies.get.return_value = 'PRIVATE_COOKIE'
+    session.post.return_value = Mock(status_code=403, headers={}, json=lambda: {
+        'hhcaptcha': {'isBot': True, 'captchaError': True, 'captchaState': next_state},
+        'token': 'PRIVATE_TOKEN',
+    })
+
+    result = solver.submit_captcha(session, 'PRIVATE_ANSWER', 'PRIVATE_KEY',
+                                  'PRIVATE_ORIGINAL_STATE', require_confirmation=True)
+    assert result == (False, 'isBot')
+    assert session.hh_captcha_next_state == next_state
+    assert session.hh_captcha_diagnostic == {
+        'http_status': 403, 'format': 'json', 'hhcaptcha_isBot': True,
+        'redirect_present': False, 'captcha_error': True, 'state_changed': changed,
+    }
+    assert logs and 'PRIVATE' not in str(logs)
+    assert 'PRIVATE' not in str(session.hh_captcha_diagnostic)
+    session.post.assert_called_once()  # Capturing state must not replay the answer.
+
+
+def test_active_recaptcha_state_takes_precedence_after_rejection():
+    session = Mock()
+    session.cookies.get.return_value = 'xsrf-test'
+    session.post.return_value = Mock(status_code=403, headers={}, json=lambda: {
+        'hhcaptcha': {'isBot': True, 'captchaError': False, 'captchaState': 'image-state'},
+        'recaptcha': {'isBot': True, 'captchaState': 'recaptcha-state'},
+    })
+
+    assert solver.submit_captcha(session, 'human', 'key', 'old-state',
+                                 require_confirmation=True) == (False, 'recaptcha')
+    assert session.hh_captcha_next_state == 'recaptcha-state'
+    assert session.hh_captcha_diagnostic['state_changed'] is True
+    assert session.hh_captcha_diagnostic['captcha_error'] is False
+    session.post.assert_called_once()
+
+
+@pytest.mark.parametrize('body', [
+    None,
+    [],
+    {'hhcaptcha': {'isBot': True}},
+    {'hhcaptcha': {'isBot': True, 'captchaState': ''}},
+    {'hhcaptcha': {'isBot': True, 'captchaState': ['invalid'], 'captchaError': 'false'},
+     'recaptcha': {'captchaState': 42}},
+])
+def test_missing_or_malformed_response_state_does_not_reuse_previous_state(body):
+    session = Mock()
+    session.cookies.get.return_value = 'xsrf-test'
+    session.hh_captcha_next_state = 'stale-from-earlier-response'
+    session.post.return_value = Mock(status_code=403, headers={}, json=lambda: body)
+
+    result = solver.submit_captcha(session, 'human', 'key', 'old-state', require_confirmation=True)
+    assert result[0] is False
+    assert session.__dict__.get('hh_captcha_next_state') in (None, '')
+    assert 'state_changed' not in session.hh_captcha_diagnostic
+    assert 'captcha_error' not in session.hh_captcha_diagnostic
+    session.post.assert_called_once()

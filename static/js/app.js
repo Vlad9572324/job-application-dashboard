@@ -44,6 +44,7 @@ const T = {
     tab_llm: '🤖 LLM Ответы',
     tab_applied: '✅ Отклики',
     tab_tests: '🧪 Тесты',
+    tab_questionnaire_history: '🧾 История тестовых откликов',
     tab_db: '📂 База',
     tab_hh: '🎯 HH Статус',
     tab_views: '👁️ Просмотры',
@@ -312,6 +313,7 @@ const T = {
     tab_llm: '🤖 LLM Replies',
     tab_applied: '✅ Applied',
     tab_tests: '🧪 Tests',
+    tab_questionnaire_history: '🧾 Test application history',
     tab_db: '📂 Database',
     tab_hh: '🎯 HH Status',
     tab_views: '👁️ Views',
@@ -1168,12 +1170,22 @@ async function llmQuickSetup(inp) {
   }
 }
 
+function setQuestionnaireClaimsCheck(enabled) {
+  for (const id of ['llm-check-questionnaire-claims', 'questionnaire-history-check-claims']) {
+    const checkbox = document.getElementById(id);
+    if (checkbox) checkbox.checked = enabled;
+  }
+  sendCmd({type: 'set_config', key: 'llm_check_questionnaire_claims', value: enabled});
+}
+
 function syncLlmSettings(snap) {
   const cfg = snap?.config || {};
   const as = document.getElementById('llm-auto-send');
   const cl = document.getElementById('llm-use-cover-letter');
   const ur = document.getElementById('llm-use-resume');
   const fq = document.getElementById('llm-fill-questionnaire');
+  const cq = document.getElementById('llm-check-questionnaire-claims');
+  const cqHistory = document.getElementById('questionnaire-history-check-claims');
   const qr = document.getElementById('llm-use-quick-replies');
   const ail = document.getElementById('hh-ai-letter-first-try');
   const rv = document.getElementById('related-vacancies-enabled');
@@ -1193,6 +1205,10 @@ function syncLlmSettings(snap) {
     if (qrM && cfg.llm_use_quick_replies !== undefined) qrM.checked = cfg.llm_use_quick_replies;
     if (ailM && cfg.hh_ai_letter_first_try !== undefined) ailM.checked = cfg.hh_ai_letter_first_try;
     if (rvM && cfg.related_vacancies_enabled !== undefined) rvM.checked = cfg.related_vacancies_enabled;
+  }
+  if (cfg.llm_check_questionnaire_claims !== undefined) {
+    if (cq) cq.checked = cfg.llm_check_questionnaire_claims;
+    if (cqHistory) cqHistory.checked = cfg.llm_check_questionnaire_claims;
   }
   if (modeEl && cfg.llm_profile_mode) modeEl.value = cfg.llm_profile_mode;
   // Update the global toggle button
@@ -1779,7 +1795,159 @@ function captchaControlsBusy(idx, busy) {
   panel.querySelectorAll('input, button').forEach(el => { el.disabled = busy; });
 }
 
-async function loadCaptchaImg(idx) {
+let captchaHistoryView = null;
+
+function closeCaptchaHistory() {
+  const view = captchaHistoryView;
+  if (!view) return;
+  captchaHistoryView = null;
+  view.controller?.abort();
+  view.urls.forEach(url => URL.revokeObjectURL(url));
+  document.removeEventListener('keydown', view.onKeydown, true);
+  view.overlay.remove();
+  if (view.previousFocus?.isConnected) view.previousFocus.focus();
+}
+
+function openCaptchaHistory() {
+  if (captchaHistoryView) { captchaHistoryView.close.focus(); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay captcha-history-overlay';
+  overlay.innerHTML = `
+    <section class="confirm-box captcha-history-box" role="dialog" aria-modal="true" aria-labelledby="captcha-history-title">
+      <div class="captcha-history-heading">
+        <h2 id="captcha-history-title">История капч</h2>
+        <div class="captcha-history-actions">
+          <button type="button" class="btn-sm" data-history-refresh>Обновить</button>
+          <button type="button" class="btn-sm" data-history-close>Закрыть</button>
+        </div>
+      </div>
+      <div class="captcha-history-note">Последние 20 попыток по всем аккаунтам. Время — по часовому поясу браузера.</div>
+      <div class="captcha-history-status" role="status"></div>
+      <div class="captcha-history-list"></div>
+    </section>`;
+  const view = {
+    overlay,
+    close: overlay.querySelector('[data-history-close]'),
+    refresh: overlay.querySelector('[data-history-refresh]'),
+    status: overlay.querySelector('.captcha-history-status'),
+    list: overlay.querySelector('.captcha-history-list'),
+    previousFocus: document.activeElement,
+    urls: new Set(),
+    controller: null,
+  };
+  view.onKeydown = event => {
+    // Keep dashboard shortcuts (including pause/resume) out of this read-only view.
+    event.stopImmediatePropagation();
+    if (event.key === 'Escape') { event.preventDefault(); closeCaptchaHistory(); }
+    if (event.key === 'Tab') {
+      const buttons = [...overlay.querySelectorAll('button:not(:disabled)')];
+      const first = buttons[0], last = buttons[buttons.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+        event.preventDefault(); last?.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+        event.preventDefault(); first?.focus();
+      }
+    }
+  };
+  captchaHistoryView = view;
+  view.close.onclick = closeCaptchaHistory;
+  view.refresh.onclick = refreshCaptchaHistory;
+  overlay.onclick = event => { if (event.target === overlay) closeCaptchaHistory(); };
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', view.onKeydown, true);
+  view.close.focus();
+  refreshCaptchaHistory();
+}
+
+async function refreshCaptchaHistory() {
+  const view = captchaHistoryView;
+  if (!view) return;
+  view.controller?.abort();
+  const controller = new AbortController();
+  view.controller = controller;
+  view.urls.forEach(url => URL.revokeObjectURL(url));
+  view.urls.clear();
+  view.list.replaceChildren();
+  view.refresh.disabled = true;
+  view.status.textContent = 'Загружаю историю…';
+  const isCurrent = () => captchaHistoryView === view && view.controller === controller && !controller.signal.aborted;
+  try {
+    const response = await fetch('/api/captcha/attempts?limit=20', {signal: controller.signal, cache: 'no-store'});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    if (!isCurrent()) return;
+    const attempts = Array.isArray(data.attempts) ? data.attempts.slice(0, 20) : [];
+    view.status.textContent = attempts.length ? `Попыток: ${attempts.length}` : 'Сохранённых попыток пока нет.';
+    const sources = {local: 'Локальная модель', llm: 'LLM', gui: 'Веб-панель', telegram: 'Telegram', tg_manual: 'Telegram · вручную', unknown: 'Источник не сохранён'};
+    const reasons = {
+      isBot: 'HH отклонил ответ', recaptcha: 'HH запросил дополнительную проверку',
+      http_429: 'HH ограничил частоту запросов', unconfirmed: 'HH не подтвердил прохождение проверки',
+      unconfirmed_response: 'Ответ HH не содержит подтверждения прохождения',
+      unconfirmed_transport: 'Не удалось получить подтверждение из-за ошибки связи',
+      unconfirmed_verification: 'Проверка результата в HH не подтвердила прохождение',
+      exception: 'Ошибка при отправке или проверке ответа',
+    };
+    await Promise.all(attempts.map(async attempt => {
+      const item = document.createElement('article');
+      item.className = 'captcha-history-item';
+      const visual = document.createElement('div');
+      visual.className = 'captcha-history-visual';
+      visual.textContent = 'Загружаю картинку…';
+      const details = document.createElement('div');
+      details.className = 'captcha-history-details';
+      const status = document.createElement('strong');
+      status.className = 'captcha-history-outcome';
+      status.textContent = attempt.ok === true ? 'Подтверждено HH'
+        : attempt.ok === false ? (attempt.reason === 'isBot' ? 'HH отклонил ответ' : 'Не подтверждено HH')
+        : 'Результат неизвестен';
+      status.style.color = attempt.ok === true ? 'var(--green)' : attempt.reason === 'isBot' ? 'var(--red)' : 'var(--yellow)';
+      details.appendChild(status);
+      const addLine = (text, className = '') => {
+        const line = document.createElement('div');
+        line.className = className;
+        line.textContent = text;
+        details.appendChild(line);
+      };
+      addLine('Ответ: ' + (attempt.answer || 'не сохранён'), 'captcha-history-answer');
+      addLine(sources[attempt.source] || String(attempt.source || sources.unknown));
+      const date = attempt.at ? new Date(attempt.at) : null;
+      addLine(date && !Number.isNaN(date.getTime()) ? date.toLocaleString('ru-RU') : 'Время не сохранено', 'captcha-history-note');
+      if (attempt.account) addLine('Аккаунт: ' + attempt.account, 'captcha-history-note');
+      if (attempt.reason) addLine('Причина: ' + (reasons[attempt.reason] || attempt.reason));
+      if (attempt.legacy) addLine('Восстановлено из сохранённого образца', 'captcha-history-note');
+      item.append(visual, details);
+      view.list.appendChild(item);
+      try {
+        // Only archived local images: opening history never requests a live challenge.
+        const imagePath = String(attempt.image_url || '');
+        const imageUrl = new URL(imagePath, location.href);
+        if (imageUrl.origin !== location.origin || !imagePath.startsWith('/api/captcha/samples/')) throw new Error('missing_image');
+        const imageResponse = await fetch(imagePath, {signal: controller.signal});
+        if (!imageResponse.ok || !(imageResponse.headers.get('Content-Type') || '').startsWith('image/')) throw new Error('missing_image');
+        const blob = await imageResponse.blob();
+        if (!isCurrent()) return;
+        const url = URL.createObjectURL(blob);
+        view.urls.add(url);
+        const image = document.createElement('img');
+        image.alt = 'Сохранённая картинка капчи';
+        image.onerror = () => {
+          URL.revokeObjectURL(url); view.urls.delete(url);
+          if (isCurrent()) visual.textContent = 'Картинка недоступна';
+        };
+        image.src = url;
+        visual.replaceChildren(image);
+      } catch (_) {
+        if (isCurrent()) visual.textContent = 'Картинка недоступна';
+      }
+    }));
+  } catch (error) {
+    if (isCurrent()) view.status.textContent = 'Не удалось загрузить историю: ' + (error.message || error);
+  } finally {
+    if (isCurrent()) view.refresh.disabled = false;
+  }
+}
+
+async function loadCaptchaImg(idx, tryLocal = State.lastSnapshot?.config?.captcha_llm_enabled !== false) {
   const img = document.getElementById('acc-captcha-img-' + idx);
   const box = document.getElementById('acc-captcha-result-' + idx);
   if (!img) return;
@@ -1805,19 +1973,28 @@ async function loadCaptchaImg(idx) {
       const data = await r.json(); throw new Error(data.error || 'HH не вернул картинку');
     }
     const blob = await r.blob();
+    if (document.getElementById('acc-captcha-' + idx)?.hidden) return;
     img.dataset.challengeId = r.headers.get('X-Captcha-Id') || '';
     img.dataset.challengeKey = r.headers.get('X-Captcha-Key') || '';
+    if (!img.dataset.challengeId || !img.dataset.challengeKey) {
+      throw new Error('Сервер не вернул данные проверки. Нажмите «Другая», чтобы загрузить новую картинку.');
+    }
     if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
     img.src = URL.createObjectURL(blob);
     img.style.display = 'block';
     if (box) box.textContent = '';
     loaded = true;
   } catch (e) {
-    if (box) { box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)'; }
+    if (box && !document.getElementById('acc-captcha-' + idx)?.hidden) {
+      box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)';
+    }
   } finally {
     img.dataset.busy = '';
     captchaControlsBusy(idx, false);
-    if (loaded) answer?.focus();
+    if (loaded && !tryLocal) answer?.focus();
+  }
+  if (loaded && tryLocal) {
+    await solveCaptchaLocal(idx);
   }
 }
 
@@ -1897,6 +2074,54 @@ async function solveCaptcha(idx) {
       box.textContent = '⚠ Не удалось получить результат отправки. Это не означает неверный ответ. Повтор не выполняется; отклики остаются на паузе. Откройте проверку HH или загрузите новую картинку.';
       box.style.color = 'var(--yellow)';
     }
+  } finally {
+    img.dataset.busy = '';
+    captchaControlsBusy(idx, false);
+  }
+}
+
+async function solveCaptchaLocal(idx) {
+  const box = document.getElementById('acc-captcha-result-' + idx);
+  const img = document.getElementById('acc-captcha-img-' + idx);
+  if (!img || img.dataset.busy === '1') return;
+  if (!img.dataset.challengeKey) {
+    await loadCaptchaImg(idx, true);
+    return;
+  }
+  const id = img.dataset.challengeId;
+  const key = img.dataset.challengeKey;
+  img.dataset.busy = '1';
+  img.dataset.challengeKey = '';
+  captchaControlsBusy(idx, true);
+  if (box) { box.textContent = '⏳ Решение и отправка…'; box.style.color = ''; }
+  try {
+    const r = await fetch(`/api/account/${idx}/captcha/solve-local`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id, key})
+    });
+    const result = await r.json();
+    // A success snapshot can arrive while this request is pending. It owns the
+    // cleared panel; a late response must not bring back the previous attempt.
+    if (document.getElementById('acc-captcha-' + idx)?.hidden) return;
+    if (box) {
+      box.textContent = result.message || result.error || 'Не удалось решить капчу';
+      if (result.answer) {
+        const answer = document.createElement('div');
+        answer.textContent = 'Ответ локальной модели: ' + result.answer;
+        box.appendChild(answer);
+      }
+      if (result.auto_retry) {
+        const retry = document.createElement('div');
+        const seconds = Number(result.retry_seconds);
+        retry.textContent = Number.isFinite(seconds) && seconds > 0
+          ? `Следующая автоматическая попытка — через ${seconds} сек. Эта картинка и ответ сохранены; новые попытки доступны в истории капч.`
+          : 'Автоматические попытки продолжаются в фоне. Эта картинка и ответ сохранены; новые попытки доступны в истории капч.';
+        box.appendChild(retry);
+      }
+    }
+    if (result.manual_available && !result.auto_retry) img.dataset.challengeKey = key;
+  } catch (e) {
+    if (box && !document.getElementById('acc-captcha-' + idx)?.hidden) box.textContent = 'Ошибка связи при проверке капчи';
   } finally {
     img.dataset.busy = '';
     captchaControlsBusy(idx, false);
@@ -3672,6 +3897,7 @@ function renderAll(snap) {
   syncLetterSelects(snap);
   syncAccUrlChecks(snap);
   syncLlmSettings(snap);
+  syncCaptchaMode(snap.config);
   syncScheduleSettings(snap);
   syncAuditSelector(snap);
   updateLlmStatusBar(snap);
@@ -4026,14 +4252,16 @@ function buildCardHTML(acc) {
       <button class="btn-sm" id="acc-protective-btn-${acc.idx}" onclick="confirmProtectiveResume(${acc.idx})">Проверил в HH — продолжить</button>
       <div id="acc-protective-result-${acc.idx}" role="status" style="font-size:11px;margin-top:5px"></div>
     </div>
+    <div class="captcha-history-launch"><button type="button" class="btn-sm" onclick="openCaptchaHistory()">История капч</button></div>
     <div id="acc-captcha-${acc.idx}" hidden style="margin:8px 0;padding:10px;border:1px solid var(--yellow);border-radius:6px">
-      <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — введите капчу HH</div>
+      <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — проверка HH</div>
       <div id="acc-captcha-llm-${acc.idx}" hidden style="font-size:12px;margin-bottom:8px;color:var(--cyan)"></div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
         <img id="acc-captcha-img-${acc.idx}" alt="Проверка HH: введите символы с картинки" style="max-width:min(280px,100%);border:1px solid var(--dim);border-radius:4px;background:#fff;display:none">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <input id="acc-captcha-input-${acc.idx}" type="text" aria-label="Текст с картинки HH" placeholder="Текст с картинки" autocomplete="off" autocapitalize="off" spellcheck="false" style="padding:4px 8px;font-size:16px;max-width:100%;box-sizing:border-box" onkeydown="if(event.key==='Enter'){solveCaptcha(${acc.idx})}">
           <button class="btn-sm" onclick="solveCaptcha(${acc.idx})">✓ Отправить</button>
+          <button class="btn-sm" onclick="solveCaptchaLocal(${acc.idx})">🤖 Решить локально</button>
           <button class="btn-sm" onclick="loadCaptchaImg(${acc.idx})">🔄 Другая</button>
           <button class="btn-sm" onclick="loadAccountCaptcha(${acc.idx})">Открыть проверку на HH / продолжить</button>
         </div>
@@ -5216,21 +5444,58 @@ function updateCard(card, acc) {
   if (captchaPanel) {
     const needsCaptcha = acc.paused && acc.paused_reason === 'challenge';
     const newlyShown = captchaPanel.hidden && needsCaptcha;
+    const autoSolve = State.lastSnapshot?.config?.captcha_llm_enabled !== false;
     captchaPanel.hidden = !needsCaptcha;
-    if (newlyShown) { loadCaptchaImg(acc.idx); }
+    // Loading a live GUI image claims this challenge for manual handling.
+    // Merely opening an account card must leave the background solver running.
+    if (newlyShown && !autoSolve) { loadCaptchaImg(acc.idx, false); }
     const llmLine = document.getElementById('acc-captcha-llm-' + acc.idx);
     if (llmLine) {
       const r = acc.captcha_llm || {};
-      const text = r.status === 'reading' ? '🤖 LLM читает капчу…'
-        : r.status === 'unsure' ? '🤖 LLM пробовала: модели не сошлись в ответе — введите вручную'
-        : r.status === 'rejected' ? `🤖 LLM пробовала «${r.answer || ''}» — HH не принял, введите вручную`
-        : '';
+      const retrySeconds = Number(r.retry_seconds);
+      const retryDelay = Number.isFinite(retrySeconds) && retrySeconds > 0
+        ? `Следующая попытка через ${retrySeconds} сек.` : 'Следующая попытка запланирована.';
+      const retryReasons = {
+        isBot: 'HH отклонил ответ',
+        unsure: 'модель не смогла распознать картинку',
+        recognition_failed: 'модель не смогла распознать картинку',
+        model_unavailable: 'локальная модель не вернула ответ',
+        http_429: 'HH ограничил частоту запросов',
+        unconfirmed: 'HH не подтвердил прохождение проверки',
+        unconfirmed_response: 'HH не подтвердил прохождение проверки',
+        unconfirmed_transport: 'не удалось получить ответ HH',
+        unconfirmed_verification: 'HH не подтвердил завершение проверки',
+        network_error: 'не удалось связаться с HH',
+        exception: 'ошибка при проверке ответа',
+      };
+      const retryReason = r.reason ? ` ${retryReasons[r.reason] || r.reason}.` : '';
+      const retryAnswer = r.answer ? ` Ответ: «${r.answer}».` : '';
+      const text = r.status === 'reading' ? '🤖 Локальная модель читает капчу в фоне. Картинки и ответы доступны в истории капч.'
+        : r.status === 'waiting' ? '🤖 Ответ готов. Ожидается отправка в HH.'
+        : r.status === 'submitting' ? '🤖 Отправляю ответ HH…'
+        : r.status === 'retry' ? `🤖 Фоновая попытка локальной модели.${retryAnswer}${retryReason} ${retryDelay} Картинка и ответ — в истории капч.`
+        : r.status === 'blocked' ? (r.reason === 'recaptcha'
+          ? 'HH запросил дополнительную проверку reCAPTCHA. Откройте проверку на HH и завершите её вручную.'
+          : 'Автоматическое решение приостановлено. Откройте проверку на HH; подробности — в истории капч.')
+        : r.status === 'unsure' ? '🤖 Локальная модель не смогла распознать капчу — введите вручную'
+        : r.status === 'rejected' ? `🤖 Локальная модель предложила «${r.answer || ''}» — HH не принял, введите вручную`
+        : autoSolve ? '🤖 Капчу автоматически решает локальная модель. Картинки и ответы доступны в истории капч.' : '';
       llmLine.textContent = text;
       llmLine.hidden = !needsCaptcha || !text;
     }
     if (!needsCaptcha) {
       const result = document.getElementById('acc-captcha-result-' + acc.idx);
       if (result) result.replaceChildren();
+      const image = document.getElementById('acc-captcha-img-' + acc.idx);
+      if (image) {
+        image.dataset.challengeId = '';
+        image.dataset.challengeKey = '';
+        image.style.display = 'none';
+        if (image.src.startsWith('blob:')) URL.revokeObjectURL(image.src);
+        image.removeAttribute('src');
+      }
+      const input = document.getElementById('acc-captcha-input-' + acc.idx);
+      if (input) input.value = '';
     }
   }
   const pauseBtn = document.getElementById('acc-pause-btn-' + acc.idx);
@@ -5639,6 +5904,90 @@ function renderHH(snap) {
 }
 
 // ── Applied / Tests tabs ──
+const QuestionnaireHistoryState = {offset: 0, pageSize: 50, total: 0};
+
+function questionnaireStatusLabel(run) {
+  const labels = {
+    sent: '✅ Отклик подтверждён', already: '↩ Уже откликались',
+    unknown: '⚠️ Результат не подтверждён', error: '❌ Не отправлен',
+    auth_error: '🔐 Ошибка входа', challenge: '🧩 Капча',
+    limit: '🚫 Лимит HH', test: '⚠️ Анкета не принята',
+    cancelled: '⏸ Отменён', preview: '🔎 Предпросмотр, не отправлен',
+    in_progress: '⏳ Нет итоговой записи'
+  };
+  return run.blocked ? '🛑 Остановлен проверкой ответа' : (labels[run.status] || `⚠️ ${run.status || 'Неизвестно'}`);
+}
+
+async function loadQuestionnaireHistory(append = false) {
+  const list = document.getElementById('questionnaire-history-list');
+  if (!list) return;
+  if (!append) { QuestionnaireHistoryState.offset = 0; list.textContent = 'Загрузка…'; }
+  const offset = QuestionnaireHistoryState.offset;
+  try {
+    const response = await fetch(`/api/apply/questionnaire-history?limit=${QuestionnaireHistoryState.pageSize}&offset=${offset}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(response.status === 401 ? 'Нужен API-ключ' : `HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data.ok || !Array.isArray(data.items)) throw new Error(data.error || 'Некорректный ответ сервера');
+    QuestionnaireHistoryState.total = data.total;
+    QuestionnaireHistoryState.offset += data.items.length;
+    document.getElementById('questionnaire-history-count').textContent = `(${data.total} трассы)`;
+    document.getElementById('questionnaire-tests-found').textContent = Number.isInteger(data.stats?.found) ? data.stats.found.toLocaleString('ru-RU') : '—';
+    document.getElementById('questionnaire-tests-applied').textContent = Number.isInteger(data.stats?.applied) ? data.stats.applied.toLocaleString('ru-RU') : '—';
+    if (!append) list.innerHTML = '';
+    if (!data.total) list.textContent = 'Пока нет сохранённых трасс анкет.';
+    else list.insertAdjacentHTML('beforeend', data.items.map(run => {
+      const date = run.at ? new Date(run.at).toLocaleString('ru-RU') : '—';
+      const link = /^\d{5,20}$/.test(String(run.vacancy_id))
+        ? `<a href="https://hh.ru/vacancy/${encodeURIComponent(run.vacancy_id)}" target="_blank" rel="noopener noreferrer">${esc(run.title || `Вакансия ${run.vacancy_id}`)}</a>`
+        : esc(run.title || run.vacancy_id || 'Вакансия');
+      return `<details class="questionnaire-run" data-run-id="${esc(run.run_id)}" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--bg-card2)">
+        <summary style="cursor:pointer;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <span class="c-dim">${esc(date)}</span><strong>${link}</strong>
+          <span>${esc(questionnaireStatusLabel(run))}</span>
+          <span class="c-dim">${esc(run.account || '')} · ${Number(run.question_count) || 0} вопросов · ${run.origin === 'automatic' ? 'авто' : 'точечный'}</span>
+        </summary>
+        <div class="questionnaire-run-detail c-dim" style="padding:12px 2px 2px">Откройте, чтобы загрузить вопросы и трассу.</div>
+      </details>`;
+    }).join(''));
+    document.getElementById('questionnaire-history-more').style.display = QuestionnaireHistoryState.offset < data.total ? '' : 'none';
+  } catch (error) {
+    if (!append) list.textContent = `Не удалось загрузить историю: ${error.message}`;
+  }
+}
+
+function loadMoreQuestionnaireHistory() { loadQuestionnaireHistory(true); }
+
+async function loadQuestionnaireRun(details) {
+  const box = details.querySelector('.questionnaire-run-detail');
+  if (!box || box.dataset.loaded) return;
+  box.textContent = 'Загрузка вопросов и трассы…';
+  try {
+    const runId = details.dataset.runId;
+    const response = await fetch(`/api/apply/questionnaire-history/${encodeURIComponent(runId)}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(response.status === 401 ? 'Нужен API-ключ' : `HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Прогон не найден');
+    const questions = data.questions || [];
+    const qHtml = questions.length ? questions.map((q, index) => `
+      <div style="border-top:1px solid var(--border);padding:10px 0">
+        <div style="font-weight:600">${index + 1}. ${esc(q.text || q.field)}</div>
+        <div style="white-space:pre-wrap;margin-top:5px">${q.answer == null ? '<span class="c-dim">Ответ не сформирован</span>' : esc(Array.isArray(q.answer) ? q.answer.join(', ') : String(q.answer))}</div>
+        <small class="c-dim">${q.source === 'llm' ? 'Ответ LLM' : q.source === 'template' ? 'Шаблон' : 'Источник не записан'}</small>
+      </div>`).join('') : '<div class="c-dim">Вопросы не были получены.</div>';
+    const llm = data.llm || {};
+    const llmHtml = llm.provider ? `<div style="margin:8px 0">LLM: ${esc(llm.provider)}${llm.profile ? ' · ' + esc(llm.profile) : ''}${llm.model ? ' · ' + esc(llm.model) : ''}</div>` : '';
+    const stages = data.timeline || [];
+    const timeline = stages.map(e => `<li style="margin:5px 0"><span class="c-dim">${esc(e.at ? new Date(e.at).toLocaleTimeString('ru-RU') : '')}</span> <strong>${esc(e.stage)}</strong><pre style="white-space:pre-wrap;overflow-wrap:anywhere;margin:3px 0 0;font-size:11px">${esc(JSON.stringify(e.details || {}, null, 2))}</pre></li>`).join('');
+    box.innerHTML = `<div style="margin-bottom:8px">${esc(questionnaireStatusLabel(data.run))}${data.run.error_code ? ' · ' + esc(data.run.error_code) : ''}</div>${llmHtml}<h4>Вопросы и отправленные ответы</h4>${qHtml}<details style="margin-top:12px"><summary style="cursor:pointer">Полная трасса (${stages.length} событий)</summary><ol style="padding-left:20px">${timeline}</ol></details>`;
+    box.dataset.loaded = 'true';
+  } catch (error) { box.textContent = `Не удалось загрузить детали: ${error.message}`; }
+}
+
+document.getElementById('questionnaire-history-list')?.addEventListener('toggle', event => {
+  const details = event.target;
+  if (details.matches?.('.questionnaire-run') && details.open) loadQuestionnaireRun(details);
+}, true);
+
 // Applied tab state
 const AppliedState = { all: [], shown: 0, pageSize: 80 };
 
@@ -5996,6 +6345,7 @@ document.getElementById('tabs').addEventListener('click', e => {
   // Load REST tabs on switch
   if (tab === 'applied') loadApplied();
   else if (tab === 'tests') loadTests();
+  else if (tab === 'questionnaire-history') loadQuestionnaireHistory();
   else if (tab === 'db') loadDB();
   else if (tab === 'hh' && State.lastSnapshot) renderHH(State.lastSnapshot);
   else if (tab === 'hedi' && typeof initHediTab === 'function') initHediTab();
@@ -6010,7 +6360,10 @@ document.getElementById('tabs').addEventListener('click', e => {
   else if (tab === 'apply') {
     if (State.lastSnapshot) applyBuildAccountSelect(State.lastSnapshot);
   }
-  else if (tab === 'settings' && State.lastSnapshot) {
+  else if (tab === 'settings') {
+    loadCaptchaModels();
+    if (!State.lastSnapshot) return;
+    syncCaptchaMode(State.lastSnapshot.config);
     syncSettingsSliders(State.lastSnapshot);
     qSyncFromSnapshot(State.lastSnapshot);
     ltSyncFromSnapshot(State.lastSnapshot);
@@ -6093,7 +6446,7 @@ function humanPreview() {
   const enabled = document.getElementById('hp-human_mode_enabled').checked;
   document.getElementById('human-preview').textContent = !valid ? 'Некорректные часы: используйте HH-HH (например 07-24 или 22-06).' :
     !delaysValid ? 'Укажите обе задержки: неотрицательные целые числа, минимум не больше максимума.' :
-    `Целевой темп: ~${target.toFixed(1)} applies/час (~${Math.round(target * 17)} в день) на аккаунт. Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (МСК: ${hour ?? '—'} ч); ${enabled ? 'одна попытка не чаще чем раз в ' + (interval / 60).toFixed(1) + ' мин; интервал сохраняется после перезапуска.' : 'режим выключен'}. Отклики сегодня: ${appliedToday}. Капчи за 7 дней: ${week.challenges || 0}, из них решено LLM: ${week.llm_solved || 0}.`;
+    `Целевой темп: ~${target.toFixed(1)} applies/час (~${Math.round(target * 17)} в день) на аккаунт. Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (МСК: ${hour ?? '—'} ч); ${enabled ? 'одна попытка не чаще чем раз в ' + (interval / 60).toFixed(1) + ' мин; интервал сохраняется после перезапуска.' : 'режим выключен'}. Отклики сегодня: ${appliedToday}. Капчи за 7 дней: ${week.challenges || 0}, из них решено автоматически: ${week.llm_solved || 0}.`;
 }
 
 function applyHumanSettings() {
@@ -8383,7 +8736,7 @@ const TAB_KEYS = {'1':'main','2':'log','3':'applied','4':'tests','5':'db','6':'h
 // 'recoh' — динамическая вкладка от feat5_recommendations.js, вставляется
 // после DOMContentLoaded. Whitelist обязан её знать, иначе F5 на вкладке
 // «Рекомендации» кидает юзера на Главную (аудит 2026-08-17 #29).
-const _ALL_TAB_IDS = new Set([...Object.values(TAB_KEYS), 'llm', 'recoh']);
+const _ALL_TAB_IDS = new Set([...Object.values(TAB_KEYS), 'llm', 'recoh', 'questionnaire-history']);
 
 // ── HH mobile OTP authentication ───────────────────────────
 const MOBILE_AUTH_FIELDS = [
@@ -8721,15 +9074,10 @@ setInterval(() => {
   const status = document.getElementById('tg-status');
   if (!cfg || !status) return;
   status.textContent = !cfg.telegram_bot_token_set ? '⚠ токен не задан' : cfg.telegram_connected ? '🟢 подключён' : '🔴 offline';
-  const llmEnabled = document.getElementById('captcha-llm-enabled');
-  if (llmEnabled && !llmEnabled.dataset.initialized) {
-    llmEnabled.checked = cfg.captcha_llm_enabled !== false;
-    llmEnabled.dataset.initialized = '1';
-  }
   const stats = document.getElementById('captcha-llm-stats');
   const week = cfg.captcha_llm_week || {};
-  if (stats) stats.textContent = `За 7 дней: капч ${week.challenges || 0}, решено LLM — ${week.llm_solved || 0}`
-    + ` (попыток LLM: ${week.llm_attempts || 0}; остальные — вручную)`;
+  if (stats) stats.textContent = `За 7 дней: капч ${week.challenges || 0}, решено автоматически — ${week.llm_solved || 0}`
+    + ` (автопопыток: ${week.llm_attempts || 0}; остальные — вручную)`;
   const enabled = document.getElementById('tg-enabled');
   if (!enabled.dataset.initialized) {
     enabled.checked = cfg.telegram_captcha_enabled !== false;
@@ -8776,14 +9124,120 @@ setInterval(() => {
   }
 }, 1000);
 
-async function saveCaptchaLLM(input) {
+function syncCaptchaMode(cfg) {
+  const mode = document.getElementById('captcha-solve-mode');
+  if (!mode || !cfg || mode.dataset.saving === '1' ||
+      Date.now() < Number(mode.dataset.syncAfter || 0)) return;
+  mode.value = cfg.captcha_llm_enabled === false ? 'manual' : 'local';
+  updateCaptchaModeHint(mode.value);
+}
+
+function updateCaptchaModeHint(mode) {
+  const hint = document.getElementById('captcha-mode-hint');
+  if (!hint) return;
+  hint.textContent = mode === 'manual'
+    ? 'Для новых проверок бот не запускает модель. Введите текст с картинки в карточке аккаунта или в Telegram, если он включён.'
+    : 'Для новых проверок локальная модель пробует решить капчу автоматически. При сложной проверке потребуется ручное решение.';
+}
+
+async function saveCaptchaMode(input) {
+  const enabled = input.value === 'local';
+  const resultEl = document.getElementById('captcha-mode-result');
+  const previous = State.lastSnapshot?.config?.captcha_llm_enabled === false ? 'manual' : 'local';
+  input.dataset.saving = '1';
+  input.disabled = true;
+  updateCaptchaModeHint(input.value);
+  if (resultEl) resultEl.textContent = 'Сохраняю режим…';
   try {
-    const result = await telegramPost('/api/settings', {key: 'captcha_llm_enabled', value: input.checked});
+    const result = await telegramPost('/api/settings', {key: 'captcha_llm_enabled', value: enabled});
     if (result.ok === false) throw new Error('Save failed');
-    document.getElementById('tg-result').textContent = 'Сохранено';
+    if (State.lastSnapshot?.config) State.lastSnapshot.config.captcha_llm_enabled = enabled;
+    input.dataset.syncAfter = String(Date.now() + 3000);
+    if (resultEl) resultEl.textContent = '✓ Режим сохранён';
   } catch (e) {
-    input.checked = !input.checked;
-    document.getElementById('tg-result').textContent = 'Не удалось сохранить настройки';
+    input.value = previous;
+    updateCaptchaModeHint(previous);
+    if (resultEl) resultEl.textContent = 'Не удалось сохранить режим';
+  } finally {
+    input.disabled = false;
+    delete input.dataset.saving;
+  }
+}
+
+async function loadCaptchaModels() {
+  const select = document.getElementById('captcha-model-select');
+  const installed = document.getElementById('captcha-model-installed');
+  if (!select) return;
+  try {
+    const response = await fetch('/api/captcha/models');
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.detail || 'Не удалось загрузить список');
+    select.replaceChildren();
+    for (const model of data.models) {
+      const option = document.createElement('option');
+      option.value = model.name;
+      option.textContent = `${model.name === 'default' ? 'Основная (уже загружена)' : model.name} (${(model.size_bytes / 1048576).toFixed(1)} МБ)`;
+      select.appendChild(option);
+    }
+    select.value = data.active;
+    const activeModel = data.models.find(model => model.name === data.active);
+    if (installed) {
+      installed.textContent = activeModel
+        ? `✓ Загружена и активна: ${activeModel.name === 'default' ? 'Основная модель' : activeModel.name} (${(activeModel.size_bytes / 1048576).toFixed(1)} МБ). Всего моделей: ${data.models.length}.`
+        : '⚠ Активная модель отсутствует. Загрузите и выберите модель.';
+    }
+  } catch (error) {
+    if (installed) installed.textContent = error.message || 'Не удалось проверить загруженные модели';
+  }
+}
+
+async function selectCaptchaModel() {
+  const select = document.getElementById('captcha-model-select');
+  const status = document.getElementById('captcha-model-result');
+  if (!select?.value) return;
+  if (status) status.textContent = 'Проверяю модель…';
+  try {
+    const response = await fetch('/api/captcha/models/select', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: select.value}),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.detail || 'Не удалось выбрать модель');
+    if (State.lastSnapshot?.config) State.lastSnapshot.config.captcha_model_name = data.active;
+    if (status) status.textContent = `✓ Активная модель: ${data.active}`;
+    await loadCaptchaModels();
+  } catch (error) {
+    if (status) status.textContent = error.message || 'Не удалось выбрать модель';
+    await loadCaptchaModels();
+  }
+}
+
+async function uploadCaptchaModel() {
+  const name = document.getElementById('captcha-model-name');
+  const weights = document.getElementById('captcha-model-weights');
+  const charset = document.getElementById('captcha-model-charset');
+  const status = document.getElementById('captcha-model-result');
+  if (!name?.value.trim() || !weights?.files?.length) {
+    if (status) status.textContent = 'Укажите имя и выберите файл весов .pt';
+    return;
+  }
+  const form = new FormData();
+  form.append('name', name.value.trim());
+  form.append('weights', weights.files[0]);
+  if (charset?.files?.length) form.append('charset', charset.files[0]);
+  if (status) status.textContent = 'Загружаю и проверяю модель…';
+  try {
+    const response = await fetch('/api/captcha/models', {method: 'POST', body: form});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.detail || 'Не удалось загрузить модель');
+    if (status) status.textContent = `✓ Модель ${data.name} загружена. Выберите её в списке и нажмите «Выбрать модель».`;
+    name.value = '';
+    weights.value = '';
+    if (charset) charset.value = '';
+    await loadCaptchaModels();
+    document.getElementById('captcha-model-select').value = data.name;
+  } catch (error) {
+    if (status) status.textContent = error.message || 'Не удалось загрузить модель';
   }
 }
 

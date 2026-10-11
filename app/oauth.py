@@ -1110,12 +1110,15 @@ def fetch_resume_status(acc: dict, force: bool = False) -> dict:
 def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
     """Apply to vacancy via OAuth API. Returns (result_str, info_dict)."""
     from app.llm import _randomize_text
+    from app.gender_guard import conflicting_gender_words
+    message = _randomize_text(message) if message else message
+    if conflicting_gender_words(message):
+        return "error", {"error_code": "gender_mismatch"}
     token = _obtain_oauth_token(acc)
     if not token:
         return "error", {"exception": "OAuth token не получен"}
     resume_hash = acc.get("resume_hash", "")
     try:
-        message = _randomize_text(message) if message else message
         resume_hash_quoted = urllib.parse.quote(resume_hash, safe="")
         data = {"vacancy_id": vid, "resume_id": resume_hash_quoted}
         if message:
@@ -1133,7 +1136,9 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
                 challenge_payload = r.json()
             except ValueError:
                 challenge_payload = None
-            if capture(acc, r.status_code, challenge_payload) is not None:
+            if capture(acc, r.status_code, challenge_payload, source='oauth_apply',
+                       request_context={'operation': 'apply', 'vacancy_id': str(vid),
+                                        'resume_id': resume_hash}) is not None:
                 return 'challenge', {'error_type': 'captcha_required'}
         if r.status_code in (200, 201, 204):
             # Success — try to get vacancy info

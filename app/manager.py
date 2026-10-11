@@ -6,6 +6,7 @@ import asyncio
 import aiohttp
 import json
 import hashlib
+import math
 import random
 from datetime import datetime, timedelta, timezone
 from collections import deque
@@ -306,6 +307,7 @@ from app.hh_api import (
 )
 
 from app.llm import generate_llm_reply, _openclaw_command, get_llm_last_status, get_llm_status_summary
+from app.gender_guard import conflicting_gender_words
 
 from app.hh_client_factory import get_client
 from app.user_agent import login_device_identity
@@ -391,14 +393,15 @@ class BotManager:
         # Сериализация append к data/llm_log.jsonl (kimi-search-1 #5).
         self._llm_log_write_lock = threading.Lock()
 
-    def _can_mutate(self, state, *, llm=False, chat=False):
+    def _can_mutate(self, state, *, llm=False, chat=False, allow_global_pause=False):
         from app.captcha import active as captcha_active
         stop = getattr(self, "_stop_event", None)
         # The daily apply quota does not apply to answering HR in existing chats.
         chat = chat or llm
         limit_only = chat and getattr(state, "paused_reason", "") == "limit"
         return not (
-            (stop is not None and stop.is_set()) or getattr(self, "paused", False)
+            (stop is not None and stop.is_set())
+            or (getattr(self, "paused", False) and not allow_global_pause)
             or (state.paused and not limit_only) or state._deleted
             or (getattr(state, "hard_stopped", False) and not chat)
             or getattr(state, "pending_apply", None)
@@ -1942,7 +1945,7 @@ class BotManager:
         if coordinator is None:
             return False
         keys = (str(acc.get('user_id', '')), str(acc.get('resume_hash', '')))
-        return any(item['acc_key'] in keys and item['captcha_key']
+        return any(not item.get('automatic') and item['acc_key'] in keys and item['captcha_key']
                    for item in list(coordinator.pending.values()))
 
     def _captcha_llm_status(self, acc):
@@ -2396,7 +2399,7 @@ class BotManager:
             "config": {
                 **{key: getattr(CONFIG, key) for key in TOGGLES.values()},
                 "telegram_captcha_enabled": CONFIG.telegram_captcha_enabled,
-                **{key: getattr(CONFIG, key) for key in ("captcha_llm_enabled", "captcha_llm_solved", "captcha_llm_forwarded")},
+                **{key: getattr(CONFIG, key) for key in ("captcha_llm_enabled", "captcha_model_name", "captcha_llm_solved", "captcha_llm_forwarded")},
                 "telegram_bot_token_set": bool(CONFIG.telegram_bot_token),
                 "telegram_connected": bool(getattr(getattr(self, "telegram_captcha_bot", None), "connected", False)),
                 "pages_per_url": CONFIG.pages_per_url,
@@ -2438,6 +2441,7 @@ class BotManager:
                 "llm_enabled": CONFIG.llm_enabled,
                 "llm_auto_send": CONFIG.llm_auto_send,
                 "llm_fill_questionnaire": CONFIG.llm_fill_questionnaire,
+                "llm_check_questionnaire_claims": CONFIG.llm_check_questionnaire_claims,
                 "llm_use_cover_letter": CONFIG.llm_use_cover_letter,
                 "llm_use_resume": CONFIG.llm_use_resume,
                 "llm_applicant_gender": CONFIG.llm_applicant_gender,
@@ -2571,7 +2575,9 @@ class BotManager:
             remaining = human_pace.captcha_cooldown_remaining(state)
             if remaining <= 0:
                 return True
-            state.status_detail = f'Пауза после капчи: ещё {(remaining + 59) // 60:.0f} мин'
+            state.status_detail = (f'Пауза после капчи: ещё {math.ceil(remaining)} сек'
+                                   if remaining < 60 else
+                                   f'Пауза после капчи: ещё {math.ceil(remaining / 60)} мин')
             set_activity(state, 'wait_between_batches', state.status_detail,
                 'После паузы проверит ограничения перед возобновлением',
                 wait_until=datetime.now(timezone.utc) + timedelta(seconds=remaining))
@@ -3728,13 +3734,15 @@ class BotManager:
                         title = info.get("title", "")
                         company = info.get("company", "")
                         display_title = title[:40] if title else vid
+                        # Record the discovery even when this run immediately
+                        # proceeds to the questionnaire and succeeds.
+                        add_test_vacancy(vid, title, company,
+                                         acc["name"], acc.get("resume_hash", ""))
 
                         if not (state.apply_tests or CONFIG.auto_apply_tests):
                             cycle_outcome(state, vid, "skipped", "questionnaire_disabled")
                             # Откликаться на тесты выключено — пропускаем
                             state.tests += 1
-                            add_test_vacancy(vid, title, company,
-                                             acc["name"], acc.get("resume_hash", ""))
                             self._push_action(state, f"⏭️ {display_title[:25]}")
                             self._add_response(state, vid, title, company, "test")
                             self._add_log(state.short, state.color,
@@ -4784,6 +4792,13 @@ class BotManager:
                             "sent": False, "source": "robot_draft",
                         })
                         continue
+                    gender_words = conflicting_gender_words(btn_text)
+                    if gender_words:
+                        self._add_log(state.short, state.color,
+                            f"⚠️ [{employer_short}] Кнопка робота не отправлена: род не совпадает с настройкой ({', '.join(gender_words)})",
+                            "warning", neg_id=neg_id)
+                        state._llm_temp_skip[key] = time.time() + 1800
+                        continue
                     # Аудит 2026-08-17 #10: раньше robot-flow отправлял сразу без
                     # резервации global_key → под конкурентными циклами двух
                     # аккаунтов один и тот же workflow_button слался дважды.
@@ -4987,6 +5002,13 @@ class BotManager:
                             self._add_log(state.short, state.color,
                                 f"\U0001f916 [{employer_short}] LLM 3 раза не смог ответить — ответьте вручную", "warning", neg_id=neg_id)
                             continue
+                        state._llm_temp_skip[key] = time.time() + 1800
+                        continue
+                    gender_words = conflicting_gender_words(reply_text)
+                    if gender_words:
+                        self._add_log(state.short, state.color,
+                            f"⚠️ [{employer_short}] Ответ не отправлен: род не совпадает с настройкой ({', '.join(gender_words)})",
+                            "warning", neg_id=neg_id)
                         state._llm_temp_skip[key] = time.time() + 1800
                         continue
                     log_debug(f"LLM [{state.short}] {neg_id}: ответ получен ({len(reply_text)} симв.), отправляю")

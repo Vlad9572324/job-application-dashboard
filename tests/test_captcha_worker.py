@@ -11,11 +11,13 @@ from app.telegram_bot import TelegramCaptchaBot
 @pytest.mark.parametrize('outcomes', [[(True, '')], [(False, 'isBot'), (True, '')],
                                      [(False, 'isBot')] * 3, [(False, 'recaptcha')]])
 def test_flow(monkeypatch, outcomes):
+    monkeypatch.setattr(CONFIG, 'captcha_llm_enabled', False)
     monkeypatch.setattr(CONFIG, 'telegram_bot_token', 'test-placeholder')
     monkeypatch.setattr(CONFIG, 'telegram_chat_id', '-123')
     acc = {'user_id': 'test-account', 'short': 'Test', 'cookies': {}}
     captcha.hold(acc, {'captcha_url': 'https://hh.ru/account/captcha?state=test-state&backurl=ignored'})
     cid = captcha.current(acc)['id']
+    failurl = captcha.browser_url(captcha.current(acc))
     manager = SimpleNamespace(account_states=[SimpleNamespace(acc=acc)], temp_states={},
                               resume_challenge_account=Mock())
     session = SimpleNamespace()
@@ -33,7 +35,7 @@ def test_flow(monkeypatch, outcomes):
         assert coordinator.pending[cid]['captcha_state'] == 'test-state'
         for _ in outcomes:
             await bot.on_message('answer', -123, 7)
-        assert submit.call_args.args == (session, 'answer', 'test-key', 'test-state', 'https://hh.ru/', 'https://hh.ru/')
+        assert submit.call_args.args == (session, 'answer', 'test-key', 'test-state', 'https://hh.ru/', failurl)
         if outcomes[-1][0]:
             # На успехе challenge снят, worker разбужен (auto-resume UX).
             assert not captcha.current(acc)

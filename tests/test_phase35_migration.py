@@ -115,6 +115,9 @@ EXCLUDED_FILES = {
     # Security fix: routes/apply.py импортирует _aio_egress_kwargs (private
     # helper для правильного proxy в aiohttp — не hot-path caller).
     "app/routes/apply.py",
+    # Targeted questionnaire tracing needs preview and exact reviewed-answer
+    # submission options that are not part of the generic HHClient contract.
+    "app/routes/questionnaire_trace.py",
 }
 
 # Файлы, чьи hot-path call-site мигрированы на get_client(acc).

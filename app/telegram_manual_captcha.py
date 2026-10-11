@@ -240,6 +240,9 @@ class ManualCaptchaFlow:
                         item['session'], item['url'], item['success_url'])
             except Exception:
                 ok, reason = False, 'unconfirmed_transport'
+            if not ok:
+                captcha.update_challenge_state(state.acc, item['cid'],
+                    getattr(item['session'], 'hh_captcha_next_state', None))
             from app.captcha_journal import record as journal
             journal('solve', state.acc, path='tg_manual', ok=ok, reason=reason or None, id=item['cid'])
             if ok:

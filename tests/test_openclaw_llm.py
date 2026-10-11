@@ -136,7 +136,7 @@ def test_generate_openclaw_reply_uses_compacted_prompt(monkeypatch):
 def test_applicant_gender_forms_default_female(monkeypatch):
     monkeypatch.setattr(CONFIG, "llm_applicant_gender", "female")
     forms = applicant_gender_forms()
-    assert forms["responded"] == "соискатель откликнулась"
+    assert forms["responded"] == "соискательница откликнулась"
     assert forms["consistency"] == "будь последовательна"
     assert forms["default_questionnaire_answer"] == "Готова рассказать подробнее на собеседовании."
 

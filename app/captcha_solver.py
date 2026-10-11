@@ -16,10 +16,36 @@
 - HH.request с shared cookie_jar_key НЕ подходит: state пересекается с обычным трафиком.
   Используем свой requests.Session per-challenge.
 """
+import math
+import time
+
 import requests
 from urllib.parse import parse_qs, urlsplit, urljoin, urlencode
 
 from app.hh_http import egress_proxies
+from app.human_pace import respect_retry_after
+
+
+# Immediate answers in a newly opened HH check were consistently rejected,
+# while the first answer after 8–12 seconds was accepted. Count recognition
+# time toward this conservative initial wait; refreshed images keep the clock.
+INITIAL_SUBMIT_DELAY_SECONDS = 10.0
+
+
+def captcha_submit_delay(session):
+    """Remaining initial wait; callers await it before dispatching a POST."""
+    deadline = getattr(session, 'hh_captcha_submit_not_before', None)
+    if (isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+            or not math.isfinite(deadline)):
+        return 0.0
+    return max(0.0, deadline - time.monotonic())
+
+
+def _http_failure(stage, response):
+    error = ValueError(f'{stage}_http_{response.status_code}')
+    error.retry_after = (respect_retry_after(response.headers, default_sec=60)
+                         if response.status_code == 429 else 0)
+    return error
 
 # The Android app opens captcha_url in its WebView. A desktop Windows browser
 # solving a captcha issued to a mobile token is a second, mismatched client.
@@ -66,7 +92,7 @@ def _prime_session(captcha_url: str) -> tuple[requests.Session, str, str]:
                                params={'state': state, 'backurl': backurl},
                                timeout=15, allow_redirects=True)
         if response.status_code != 200:
-            raise ValueError(f'prime_http_{response.status_code}')
+            raise _http_failure('prime', response)
         # HH may redirect the page to e.g. ekaterinburg.hh.ru. Its frontend
         # posts relative to THAT page; posting to hh.ru again can redirect for
         # routing reasons instead of processing the human answer.
@@ -76,6 +102,18 @@ def _prime_session(captcha_url: str) -> tuple[requests.Session, str, str]:
             final = urlsplit(final_url)
             if final.path == '/account/captcha':
                 session.hh_captcha_origin = f'{final.scheme}://{final.netloc}'
+        # The form submits the page's current state, which can replace the
+        # state in the original API challenge URL.
+        from app.hh_resume import parse_hh_lux_ssr
+        html = getattr(response, 'text', '')
+        bootstrap = parse_hh_lux_ssr(html) if isinstance(html, str) else {}
+        if isinstance(bootstrap, dict):
+            for name in ('hhcaptcha', 'recaptcha'):
+                challenge = bootstrap.get(name)
+                current = challenge.get('captchaState') if isinstance(challenge, dict) else None
+                if isinstance(current, str) and current.strip():
+                    state = current
+                    break
     except BaseException:
         session.close()
         raise
@@ -97,6 +135,17 @@ def fetch_captcha_image(acc: dict, captcha_url: str, lang: str = 'RU'):
         raise
 
 
+def refresh_captcha_image(session, state: str, backurl: str, lang: str = 'RU'):
+    """Get a fresh key/image in the session that received the last rejection.
+
+    HH's page keeps its cookie jar when refreshing the image after an error.
+    The caller owns this session and must close it if refreshing fails.
+    """
+    if not isinstance(state, str) or not state.strip():
+        raise ValueError('missing_state')
+    return _fetch_image_in_session(session, state, backurl, lang)
+
+
 def _fetch_image_in_session(session, state, backurl, lang):
     origin = _captcha_origin(session)
     xsrf = session.cookies.get('_xsrf', '')
@@ -111,7 +160,7 @@ def _fetch_image_in_session(session, state, backurl, lang):
     r = session.post(origin + '/captcha', params={'lang': lang},
                      headers=headers, timeout=10, allow_redirects=False)
     if r.status_code != 200:
-        raise ValueError(f'get_key_http_{r.status_code}')
+        raise _http_failure('get_key', r)
     key = r.json().get('key')
     if not isinstance(key, str) or not key:
         raise ValueError('missing_key')
@@ -119,7 +168,13 @@ def _fetch_image_in_session(session, state, backurl, lang):
                     headers={'Referer': headers['Referer']},
                     timeout=10, allow_redirects=False)
     if r.status_code != 200 or not r.content:
-        raise ValueError(f'image_http_{r.status_code}')
+        raise _http_failure('image', r)
+    # A refresh belongs to the same opened check. Restarting this clock for
+    # every image would impose an unnecessary delay after each rejected answer.
+    deadline = getattr(session, 'hh_captcha_submit_not_before', None)
+    if (isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+            or not math.isfinite(deadline)):
+        session.hh_captcha_submit_not_before = time.monotonic() + INITIAL_SUBMIT_DELAY_SECONDS
     return session, key, r.content, state, backurl
 
 
@@ -130,6 +185,8 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
 
     Uses SAME session that fetched the image (DDoS-Guard state must match).
     """
+    session.hh_captcha_next_state = None
+    session.hh_captcha_retry_after = 0
     xsrf = session.cookies.get('_xsrf', '')
     origin = _captcha_origin(session)
     headers = {
@@ -152,6 +209,24 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
         diagnostic_body = None
     diagnostic = {'http_status': r.status_code,
                   'format': 'json' if diagnostic_body is not None else 'non_json'}
+    if r.status_code == 429:
+        session.hh_captcha_retry_after = respect_retry_after(r.headers, default_sec=60)
+        diagnostic['retry_after_seconds'] = session.hh_captcha_retry_after
+    # HH's form replaces its state with this error response before refreshing
+    # the image. Keep it for the next attempt; never replay the consumed key.
+    blocks = diagnostic_body if isinstance(diagnostic_body, dict) else {}
+    recaptcha = blocks.get('recaptcha')
+    order = ('recaptcha', 'hhcaptcha') if isinstance(recaptcha, dict) and recaptcha.get('isBot') is True else ('hhcaptcha', 'recaptcha')
+    for field in order:
+        value = blocks.get(field)
+        next_state = value.get('captchaState') if isinstance(value, dict) else None
+        if isinstance(next_state, str) and next_state.strip():
+            session.hh_captcha_next_state = next_state
+            diagnostic['state_changed'] = next_state != captcha_state
+            break
+    hhcaptcha = blocks.get('hhcaptcha')
+    if isinstance(hhcaptcha, dict) and isinstance(hhcaptcha.get('captchaError'), bool):
+        diagnostic['captcha_error'] = hhcaptcha['captchaError']
     for field in ('hhcaptcha', 'recaptcha'):
         value = diagnostic_body.get(field) if isinstance(diagnostic_body, dict) else None
         if isinstance(value, dict) and isinstance(value.get('isBot'), bool):
@@ -161,6 +236,8 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
     from app.logging_utils import log_debug
     import json
     log_debug('captcha_result_metadata ' + json.dumps(diagnostic, sort_keys=True))
+    if r.status_code == 429:
+        return False, 'http_429'
     # 200/400/403 с JSON {hhcaptcha:{isBot:true}} = точный failure signal.
     try:
         body = r.json()

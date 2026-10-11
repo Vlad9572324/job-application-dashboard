@@ -23,6 +23,8 @@ from app.user_agent import webview_user_agent
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume, _token_key
 from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
+from app.questionnaire_claims import unsupported_questionnaire_claims
+from app.gender_guard import conflicting_gender_words
 from app.llm import _randomize_text, generate_llm_questionnaire_answers, get_llm_last_status
 from app.hh_resume import fetch_resume_text
 
@@ -278,6 +280,10 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
         log_debug(f"   hhpro_ai_letter fail {vid}: {e}")
     if letter_max_length and len(letter) > letter_max_length:
         letter = letter[:letter_max_length].rstrip()
+    gender_words = conflicting_gender_words(letter)
+    if gender_words:
+        log_debug(f"Apply {vid}: cover letter gender conflicts blocked: {gender_words}")
+        return "error", {"error_code": "gender_mismatch", "words": gender_words}
 
     data = aiohttp.FormData()
     data.add_field("resume_hash", acc["resume_hash"])
@@ -326,9 +332,13 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
         return "unknown", {"exception": str(e)}
 
 
-async def fill_and_submit_questionnaire(acc: dict, vid: str,
+async def _fill_and_submit_questionnaire_impl(acc: dict, vid: str,
                                         vacancy_title: str = "", company: str = "", *,
-                                        receipt_account: dict | None = None) -> tuple:
+                                        receipt_account: dict | None = None,
+                                        trace=None, require_llm: bool = False,
+                                        preview_only: bool = False,
+                                        approved_answers: dict | None = None,
+                                        expected_questions: list | None = None) -> tuple:
     """
     Получает страницу опроса, заполняет шаблонными ответами и отправляет.
     Поддерживает textarea, radio, checkbox.
@@ -343,6 +353,10 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
     dispatched_at = None
     confirmation_attempted = False
     confirmation_result = ("unknown", {"error_code": "submission_unconfirmed"})
+
+    def emit(stage: str, **details):
+        if trace is not None:
+            trace(stage, details)
 
     async def unconfirmed():
         # A redirect/timeout is not an ACK. Reconcile once with a fresh read;
@@ -409,6 +423,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
             if status_code in (401, 403) or _is_login_page(html):
                 return "auth_error", {}
             if status_code != 200:
+                emit("form_fetch_failed", http_status=status_code)
                 return "error", {"http_status": status_code}
 
             # Hidden поля
@@ -417,28 +432,62 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
 
             # Парсим все поля опроса
             questions, field_answers = _parse_questionnaire_fields(html)
+            answer_sources = {field: "template" for field in field_answers}
+            rich_qs = _parse_questionnaire_rich(html)
+            if expected_questions is not None and rich_qs != expected_questions:
+                emit("reviewed_form_changed")
+                return "error", {"error_code": "reviewed_form_changed"}
+            resume_text = ""
+            emit("form_parsed", http_status=status_code, questions=rich_qs,
+                 fields_found=list(field_answers))
 
             if not field_answers:
                 log_debug(f"Questionnaire: no task fields found for {vid}")
+                emit("form_unrecognized")
                 return "test", {}
 
             # LLM-заполнение опросника (если включено)
             if CONFIG.llm_fill_questionnaire and CONFIG.llm_enabled and questions:
-                rich_qs = _parse_questionnaire_rich(html)
-                resume_text = ""
                 if CONFIG.llm_use_resume:
-                    # fetch_resume_text — sync requests.get с 15s timeout.
-                    # В async-функции блокирует event loop → выносим в executor.
                     import asyncio as _aio
-                    resume_text = await _aio.get_event_loop().run_in_executor(None, fetch_resume_text, acc)
+                    resume_source = "none"
+                    if str(acc.get("mode") or "").lower() == "oauth":
+                        def fetch_oauth_resume():
+                            from app.hh_client_factory import get_client
+                            from app.manager import _resume_plain_text
+                            try:
+                                return _resume_plain_text(get_client(acc).fetch_resume())
+                            except Exception as exc:
+                                log_debug(f"Questionnaire resume OAuth fetch: {type(exc).__name__}")
+                                return ""
+                        resume_text = await _aio.get_event_loop().run_in_executor(None, fetch_oauth_resume)
+                        if resume_text:
+                            resume_source = "oauth"
+                    if not resume_text:
+                        # Web fallback; both sync transports run outside the event loop.
+                        resume_text = await _aio.get_event_loop().run_in_executor(None, fetch_resume_text, acc)
+                        if resume_text:
+                            resume_source = "web"
+                    emit("resume_context", available=bool(resume_text), characters=len(resume_text),
+                         source=resume_source)
+                    if require_llm and not resume_text:
+                        return "error", {"error_code": "resume_unavailable"}
                 # generate_llm_questionnaire_answers тоже sync (OpenAI client).
                 import asyncio as _aio2
-                llm_ans = await _aio2.get_event_loop().run_in_executor(
-                    None,
-                    lambda: generate_llm_questionnaire_answers(
-                        rich_qs, vacancy_title, company, resume_text=resume_text, account_key=f"questionnaire:{acc.get('resume_hash') or acc.get('short') or vid}"
-                    ),
-                )
+                if approved_answers is not None:
+                    if not isinstance(approved_answers, dict) or set(approved_answers) != set(field_answers):
+                        return "error", {"error_code": "reviewed_fields_changed"}
+                    llm_ans = approved_answers
+                    emit("reviewed_answers_reused", fields=list(approved_answers))
+                else:
+                    llm_ans = await _aio2.get_event_loop().run_in_executor(
+                        None,
+                        lambda: generate_llm_questionnaire_answers(
+                            rich_qs, vacancy_title, company, resume_text=resume_text,
+                            account_key=f"questionnaire:{acc.get('resume_hash') or acc.get('short') or vid}",
+                            **({"trace": trace} if trace is not None else {}),
+                        ),
+                    )
                 if llm_ans:
                     # Validate LLM answers against actual options
                     rich_fields = {q["field"]: q for q in rich_qs}
@@ -489,7 +538,14 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                     overridden = [f for f in validated_ans if f in field_answers]
                     for f in overridden:
                         field_answers[f] = validated_ans[f]
+                        answer_sources[f] = "llm"
                     log_debug(f"Questionnaire {vid}: LLM заполнил {len(overridden)}/{len(field_answers)} полей: {overridden}")
+                    emit("llm_answers_validated", proposed=llm_ans, accepted=validated_ans,
+                         overridden_fields=overridden)
+                    if require_llm and not overridden:
+                        return "error", {"error_code": "llm_answers_rejected"}
+                    if approved_answers is not None and set(overridden) != set(field_answers):
+                        return "error", {"error_code": "reviewed_answers_rejected"}
                 else:
                     llm_status = get_llm_last_status(f"questionnaire:{acc.get('resume_hash') or acc.get('short') or vid}", "questionnaire")
                     provider = llm_status.get("provider") or "unknown"
@@ -501,6 +557,38 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                             f"Questionnaire {vid}: LLM не дал валидный ответ "
                             f"(provider={provider}, status={status}), используем шаблоны"
                         )
+                    emit("llm_no_answer", provider=provider, status=status)
+                    if require_llm:
+                        return "error", {"error_code": "llm_no_answer"}
+            elif require_llm:
+                emit("llm_disabled")
+                return "error", {"error_code": "llm_disabled"}
+
+            emit("answers_ready", answers=field_answers, sources=answer_sources)
+            if CONFIG.llm_check_questionnaire_claims:
+                issues = unsupported_questionnaire_claims(
+                    rich_qs, field_answers, answer_sources, resume_text,
+                    str(getattr(CONFIG, "llm_system_prompt", "") or "")[:4000])
+                if issues:
+                    emit("answer_review_blocked", issues=issues)
+                    log_debug(f"Questionnaire {vid}: unsupported LLM claims blocked: {issues}")
+                    return "error", {"error_code": "unsupported_claims", "issues": issues}
+            gender_issues = [{"field": field, "words": words}
+                             for field, answer in field_answers.items()
+                             if isinstance(answer, str)
+                             if (words := conflicting_gender_words(answer))]
+            letter = _randomize_text(acc.get("letter", ""))
+            letter_words = conflicting_gender_words(letter)
+            if letter_words:
+                gender_issues.append({"field": "letter", "words": letter_words})
+            if gender_issues:
+                emit("answer_gender_blocked", issues=gender_issues)
+                log_debug(f"Questionnaire {vid}: gender conflicts blocked: {gender_issues}")
+                return "error", {"error_code": "gender_mismatch", "issues": gender_issues}
+            if preview_only:
+                emit("preview_ready", fields=list(field_answers))
+                return "preview", {"questions": rich_qs, "answers": field_answers,
+                                   "sources": answer_sources}
 
             log_debug(f"Questionnaire {vid}: {len(field_answers)} fields, {len(questions)} questions")
             for name, val in field_answers.items():
@@ -510,7 +598,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
             data = aiohttp.FormData()
             data.add_field("resume_hash", resume_id)
             data.add_field("vacancy_id", vid)
-            data.add_field("letter", _randomize_text(acc.get("letter", "")))
+            data.add_field("letter", letter)
             data.add_field("lux", "true")
 
             for name in ("_xsrf", "uidPk", "guid", "startTime", "testRequired"):
@@ -527,6 +615,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
 
             # Шаг 3: POST
             ensure_mutation_allowed(acc)
+            emit("submission_started")
             dispatched_at = time.time()
             dispatched = True
             async with session.post(
@@ -542,6 +631,8 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 txt = await r2.text()
 
             log_debug(f"Questionnaire submit {vid}: HTTP {status} location={location}")
+            emit("submission_response", http_status=status, redirect_to_form=(
+                "withoutTest=no" in location or f"vacancyId={vid}" in location))
 
             from app.captcha import capture
             try:
@@ -579,9 +670,57 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
         return "cancelled", {}
     except Exception as e:
         log_debug(f"fill_and_submit_questionnaire error: {e}")
+        emit("exception", error_type=type(e).__name__, dispatched=dispatched)
         if dispatched:
             return await unconfirmed()
         return "error", {"error_code": "questionnaire_fetch_failed"}
+
+
+async def fill_and_submit_questionnaire(acc: dict, vid: str,
+                                        vacancy_title: str = "", company: str = "", *,
+                                        receipt_account: dict | None = None,
+                                        trace=None, require_llm: bool = False,
+                                        preview_only: bool = False,
+                                        approved_answers: dict | None = None,
+                                        expected_questions: list | None = None) -> tuple:
+    """Record every ordinary questionnaire run; targeted runs bring their own trace."""
+    if trace is not None:
+        return await _fill_and_submit_questionnaire_impl(
+            acc, vid, vacancy_title, company, receipt_account=receipt_account,
+            trace=trace, require_llm=require_llm, preview_only=preview_only,
+            approved_answers=approved_answers, expected_questions=expected_questions)
+    if not re.fullmatch(r"\d{5,20}", str(vid)):
+        # Synthetic test IDs must not become entries in the durable UI history.
+        return await _fill_and_submit_questionnaire_impl(
+            acc, vid, vacancy_title, company, receipt_account=receipt_account,
+            require_llm=require_llm, preview_only=preview_only,
+            approved_answers=approved_answers, expected_questions=expected_questions)
+
+    from uuid import uuid4
+    from app.routes.questionnaire_trace import _record
+    source = receipt_account or acc
+    run_id = uuid4().hex
+    account = str(source.get("name") or source.get("short") or source.get("resume_hash") or "")
+    def record(stage, details):
+        try:
+            _record(run_id, account, str(vid), stage, details)
+        except OSError as exc:
+            log_debug(f"Questionnaire trace write failed: {type(exc).__name__}")
+    record("started", {"mode": source.get("mode", "web"),
+                       "title": vacancy_title, "company": company, "origin": "automatic"})
+    try:
+        result, info = await _fill_and_submit_questionnaire_impl(
+            acc, vid, vacancy_title, company, receipt_account=receipt_account,
+            trace=record, require_llm=require_llm, preview_only=preview_only,
+            approved_answers=approved_answers, expected_questions=expected_questions)
+    except Exception as exc:
+        record("error", {"error_type": type(exc).__name__})
+        raise
+    safe_info = {k: v for k, v in (info or {}).items()
+                 if k in ("error_code", "error_type", "http_status", "reason", "receipt_confirmed")
+                 and isinstance(v, (str, int, bool))}
+    record("result", {"status": result, "info": safe_info})
+    return result, info
 
 
 def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:

@@ -179,6 +179,10 @@ async def _captcha_image_locked(idx: int):
     record = captcha.current(state.acc)
     if not record:
         return {'ok': False, 'error': 'Нет активной капчи'}
+    remaining = max(0, int(record.get('local_retry_at', 0) - time.time() + 1))
+    if record.get('local_retry_reason') == 'http_429' and remaining:
+        return {'ok': False, 'retry_seconds': remaining,
+                'error': f'HH ограничил запросы. Следующая попытка через {remaining} сек.'}
     coord = getattr(bot, 'telegram_captcha_coordinator', None)
     cid = record['id']
     # GUI sessions are separate: refreshing here must not replace Telegram's image.
@@ -194,7 +198,8 @@ async def _captcha_image_locked(idx: int):
     query.append(('backurl', backurl))
     url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
     try:
-        captcha.claim_manual(state.acc, cid)
+        captcha.claim_manual(state.acc, cid,
+                             auto_retry_after=120 if CONFIG.captcha_llm_enabled else None)
         fetch = asyncio.create_task(asyncio.to_thread(fetch_captcha_image, state.acc, url))
         try:
             session, key, image, state_val, backurl = await asyncio.shield(fetch)
@@ -207,9 +212,11 @@ async def _captcha_image_locked(idx: int):
             raise
     except Exception as e:
         return {'ok': False, 'error': f'Не удалось загрузить капчу: {type(e).__name__}'}
-    if getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid:
+    if (getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid
+            or bot.telegram_captcha_coordinator is not coord):
         session.close()
         return {'ok': False, 'error': 'Проверка изменилась. Обновите страницу.'}
+    captcha.update_challenge_state(state.acc, cid, state_val)
     # Preserve the old usable image/session if replacement fails.
     old = coord.gui_pending.pop(cid, None)
     if old and old.get('session') is not None:
@@ -236,15 +243,120 @@ async def api_account_captcha_solve(idx: int, request: Request):
         return await _captcha_solve_locked(idx, request)
 
 
-async def _captcha_solve_locked(idx: int, request: Request):
+@router.post('/api/account/{idx}/captcha/solve-local')
+async def api_account_captcha_solve_local(idx: int, request: Request):
+    """Try the already displayed image with the local model, once."""
+    from app import captcha
+    from app.captcha_llm import recognize_captcha
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return {'ok': False, 'error': 'Некорректный запрос'}
+    if not isinstance(body, dict):
+        return {'ok': False, 'error': 'Некорректный запрос'}
+    coord = getattr(bot, 'telegram_captcha_coordinator', None)
+    if coord is None:
+        return {'ok': False, 'error': 'Обработчик капчи недоступен'}
+    async with coord._lock:
+        state = bot._get_apply_state(idx)
+        if state is None or getattr(state, '_deleted', False):
+            return {'ok': False, 'error': 'Аккаунт недоступен'}
+        record = captcha.current(state.acc)
+        cid = record.get('id')
+        item = getattr(coord, 'gui_pending', {}).get(cid)
+        if (not cid or not item or not item.get('session') or not item.get('captcha_key')
+                or body.get('id') != cid or body.get('key') != item['captcha_key']
+                or item.get('submitted') or time.monotonic() - item.get('created', 0) > 600):
+            return {'ok': False, 'error': 'Откройте свежую картинку капчи'}
+        if item.get('local_attempted'):
+            return {'ok': False, 'manual_available': True,
+                    'error': 'Модель уже проверяла эту картинку. Введите ответ вручную.'}
+        item['local_attempted'] = True
+        answer = await asyncio.to_thread(recognize_captcha, item.get('image'))
+        if (getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid
+                or bot.telegram_captcha_coordinator is not coord
+                or coord.gui_pending.get(cid) is not item):
+            return {'ok': False, 'refresh_needed': True,
+                    'error': 'Проверка изменилась. Обновите страницу.'}
+        if not answer:
+            if CONFIG.captcha_llm_enabled:
+                return _queue_local_captcha_retry(state.acc, cid, item, coord,
+                                                  {'ok': False, 'reason': 'unsure'})
+            return {'ok': False, 'manual_available': True,
+                    'error': 'Модель не смогла прочитать картинку. Введите ответ вручную.'}
+        result = await _captcha_solve_locked(idx, request, answer_body={**body, 'text': answer},
+                                             source='local', auto_resume=True)
+        result['answer'] = answer
+        if (not result['ok'] and 'auto_retry' not in result and CONFIG.captcha_llm_enabled
+                and bot.telegram_captcha_coordinator is coord
+                and coord.gui_pending.get(cid) is item and not getattr(state, '_deleted', False)
+                and captcha.current(state.acc).get('id') == cid):
+            return _queue_local_captcha_retry(state.acc, cid, item, coord, result)
+        return result
+
+
+def _queue_local_captcha_retry(acc, cid, item, coord, result):
+    """Release a consumed GUI image and retry only with a fresh image/key."""
+    from app import captcha
+    from urllib.parse import parse_qs, urlsplit
+    reason = result.get('reason', 'unconfirmed_transport')
+    attempt = int(captcha.current(acc).get('local_attempts', 0)) + 1
+    retry_after = item.get('retry_after', getattr(item.get('session'), 'hh_captcha_retry_after', 0))
+    retry_after = retry_after if isinstance(retry_after, (int, float)) else 0
+    delay = (max(60, retry_after) if reason == 'http_429' else
+             min(60, 5 * 2 ** min(attempt - 1, 4)) if reason == 'isBot' else 30)
+    item['submitted'] = True
+    # An unreadable image has no submitted POST to close its session for us.
+    if reason == 'unsure':
+        with suppress(Exception):
+            item['session'].close()
+    with captcha.LOCK:
+        if (not captcha.set_local_retry(acc, cid, delay, reason, attempt)
+                or not captcha.release_manual(acc, cid)):
+            return {**result, 'auto_retry': False, 'refresh_needed': True,
+                    'error': 'Проверка изменилась. Обновите страницу.'}
+        record = captcha.current(acc)
+        pending = getattr(coord, 'pending', {}).pop(cid, None)
+        session = item.get('session')
+        if pending and pending.get('session') is not session:
+            with suppress(Exception):
+                pending.get('session').close()
+        if reason == 'isBot' and CONFIG.captcha_llm_enabled and session is not None:
+            url = captcha.browser_url(record)
+            query = parse_qs(urlsplit(url).query)
+            # Transfer only the cookie jar and challenge context. The worker
+            # must request a fresh key/image before recognizing another answer.
+            coord.pending[cid] = dict(
+                acc_key=captcha.account_key(acc), automatic=True, session=session,
+                captcha_key=None, captcha_state=query.get('state', [item['captcha_state']])[0],
+                backurl=item['backurl'], challenge_url=url, fails=0,
+                session_started=item.get('created', time.monotonic()),
+                llm_result={'status': 'retry', 'reason': reason,
+                            'retry_seconds': delay, 'answer': result.get('answer', '')})
+            item['session'] = None
+            item['captcha_key'] = None
+    if hasattr(coord, '_seen'):
+        coord._seen.discard(cid)
+    if reason == 'recaptcha':
+        return {**result, 'auto_retry': False,
+                'error': 'HH запросил reCAPTCHA. Локальная модель читает текстовые картинки; эту проверку нужно открыть на HH.'}
+    detail = ('HH ограничил запросы.' if reason == 'http_429' else
+              'Модель не смогла прочитать картинку.' if reason == 'unsure' else
+              'HH не принял ответ.' if reason == 'isBot' else 'HH не подтвердил результат.')
+    return {**result, 'auto_retry': True, 'retry_seconds': delay,
+            'error': f'{detail} Локальная модель попробует новую картинку через {int(delay)} сек.'}
+
+
+async def _captcha_solve_locked(idx: int, request: Request, *, answer_body=None,
+                                source='dashboard', auto_resume=False):
     """Submit user's captcha answer from the dashboard. Body: {"text": "..."}"""
     from app import captcha
-    from app.captcha_solver import submit_captcha, verify_manual_completion
+    from app.captcha_solver import captcha_submit_delay, submit_captcha, verify_manual_completion
     state = bot._get_apply_state(idx)
     if state is None:
         return {'ok': False, 'error': 'Аккаунт не найден'}
     try:
-        body = await request.json()
+        body = answer_body if answer_body is not None else await request.json()
     except Exception:
         return {'ok': False, 'error': 'bad json'}
     if not isinstance(body, dict) or not isinstance(body.get('text'), str):
@@ -263,58 +375,130 @@ async def _captcha_solve_locked(idx: int, request: Request):
             or item.get('submitted') or time.monotonic() - item.get('created', 0) > 600
             or getattr(state, '_deleted', False)):
         return {'ok': False, 'error': 'Картинка устарела. Обновите её и введите ответ заново.'}
+    if source != 'local':
+        captcha.claim_manual(state.acc, cid)
     item['submitted'] = True  # Consume before I/O: timeout must never replay a POST.
-    def submit_once():
-        try:
-            result = submit_captcha(item['session'], text, item['captcha_key'],
-                item['captcha_state'], item['backurl'], item['failurl'], require_confirmation=True)
-            if not result[0] and result[1].startswith('unconfirmed'):
-                return verify_manual_completion(item['session'], item['challenge_url'], item['backurl'])
-            return result
-        finally:
-            with suppress(Exception):
-                item['session'].close()
+    local_enabled_at_start = CONFIG.captcha_llm_enabled
+    session = item['session']
+    item['session'] = None  # A shutdown/refresh must not close an in-flight POST.
+    def submit_once(active_session=session):
+        result = submit_captcha(active_session, text, item['captcha_key'],
+            item['captcha_state'], item['backurl'], item['failurl'], require_confirmation=True)
+        if not result[0] and result[1].startswith('unconfirmed'):
+            return verify_manual_completion(active_session, item['challenge_url'], item['backurl'])
+        return result
     try:
-        work = asyncio.create_task(asyncio.to_thread(submit_once))
+        delay = captcha_submit_delay(session)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        # Settings and challenge ownership may change while the answer waits.
+        # Explicit local clicks remain valid with auto-solving already disabled.
+        if (getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid
+                or bot.telegram_captcha_coordinator is not coord
+                or coord.gui_pending.get(cid) is not item
+                or time.monotonic() - item.get('created', 0) > 600
+                or (source == 'local' and CONFIG.captcha_llm_enabled != local_enabled_at_start)):
+            return {'ok': False, 'auto_retry': False, 'refresh_needed': True,
+                    'error': 'Проверка или настройки изменились. Загрузите свежую картинку.'}
         try:
-            ok, reason = await asyncio.shield(work)
-        except asyncio.CancelledError:
-            # The thread may still be sending: remove its session from the
-            # coordinator so a refresh cannot close/reuse it prematurely.
-            coord.gui_pending.pop(cid, None)
-            work.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-            raise
-    except Exception:
-        ok, reason = False, 'unconfirmed_transport'
-    from app.captcha_journal import record as journal
-    journal('solve', state.acc, path='dashboard', ok=ok, reason=reason or None, id=cid)
-    if ok:
-        from app.captcha_journal import save_sample
-        save_sample(item.get('image'), text, source='gui')
-    if getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid:
-        return {'ok': False, 'refresh_needed': True,
-                'error': 'Проверка изменилась. Результат старой проверки не используется.'}
-    if ok:
-        item['confirmed'] = True
-        return {'ok': True, 'confirmed': True, 'requires_confirmation': True, 'id': cid,
-                'message': 'HH подтвердил ответ. Отклики на паузе — подтвердите продолжение отдельно.'}
-    if reason.startswith('unconfirmed'):
-        return {'ok': False, 'unconfirmed': True,
-                'refresh_needed': True,
-                'diagnostic': getattr(item['session'], 'hh_captcha_diagnostic', {}),
-                'error': 'HH не дал однозначного подтверждения. Это не означает неверный ответ. Откройте оригинальную проверку HH; пауза сохранена.'}
-    message = ('HH не принял ответ. Обновите картинку.' if reason == 'isBot' else
-               'HH запросил другой вид проверки. Откройте оригинальную страницу.' if reason == 'recaptcha' else
-               'HH ограничил запросы. Не повторяйте их сейчас.' if reason == 'http_429' else
-               'Ошибка связи с HH. Результат не подтверждён.')
-    return {'ok': False, 'error': message + ' Пауза сохранена.',
-            'refresh_needed': reason != 'http_429'}
+            work = asyncio.create_task(asyncio.to_thread(submit_once))
+            try:
+                ok, reason = await asyncio.shield(work)
+            except asyncio.CancelledError:
+                # The thread still owns the session until its POST finishes.
+                coord.gui_pending.pop(cid, None)
+                active_session = session
+                def close_submitted(done):
+                    with suppress(BaseException):
+                        done.exception()
+                    with suppress(Exception):
+                        active_session.close()
+                work.add_done_callback(close_submitted)
+                session = None
+                raise
+        except Exception:
+            ok, reason = False, 'unconfirmed_transport'
+        item['retry_after'] = getattr(session, 'hh_captcha_retry_after', 0)
+        if not ok:
+            captcha.update_challenge_state(state.acc, cid,
+                getattr(session, 'hh_captcha_next_state', None))
+        from app.captcha_journal import record as journal
+        sample = None
+        if ok:
+            from app.captcha_journal import save_sample
+            sample = save_sample(item.get('image'), text, source='local' if source == 'local' else 'gui')
+        elif source == 'local':
+            from app.captcha_journal import save_sample
+            sample = save_sample(item.get('image'), text, kind='local-rejected', source='local')
+        journal('solve', state.acc, path=source, ok=ok, reason=reason or None, id=cid,
+                answer=text, sample=sample,
+                diagnostic=getattr(session, 'hh_captcha_diagnostic', None))
+        if (getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid
+                or bot.telegram_captcha_coordinator is not coord
+                or coord.gui_pending.get(cid) is not item):
+            return {'ok': False, 'refresh_needed': True,
+                    'error': 'Проверка изменилась. Результат старой проверки не используется.'}
+        if ok:
+            item['confirmed'] = True
+            if auto_resume:
+                captcha.clear(state.acc, cid)
+                coord.gui_pending.pop(cid, None)
+                CONFIG.captcha_llm_solved += 1
+                await asyncio.to_thread(bot.resume_challenge_account, captcha.account_key(state.acc))
+                return {'ok': True, 'confirmed': True, 'id': cid, 'answer': text,
+                        'message': 'Капча решена локальной моделью. Отклики возобновляются.'}
+            return {'ok': True, 'confirmed': True, 'requires_confirmation': True, 'id': cid,
+                    'message': 'HH подтвердил ответ. Отклики на паузе — подтвердите продолжение отдельно.'}
+        if reason.startswith('unconfirmed'):
+            return {'ok': False, 'unconfirmed': True, 'reason': reason,
+                    'refresh_needed': True,
+                    'diagnostic': getattr(session, 'hh_captcha_diagnostic', {}),
+                    'error': 'HH не дал однозначного подтверждения. Это не означает неверный ответ. Откройте оригинальную проверку HH; пауза сохранена.'}
+        message = ('HH не принял ответ. Обновите картинку.' if reason == 'isBot' else
+                   'HH запросил другой вид проверки. Откройте оригинальную страницу.' if reason == 'recaptcha' else
+                   'HH ограничил запросы. Не повторяйте их сейчас.' if reason == 'http_429' else
+                   'Ошибка связи с HH. Результат не подтверждён.')
+        result = {'ok': False, 'reason': reason, 'error': message + ' Пауза сохранена.',
+                  'refresh_needed': reason != 'http_429'}
+        if source == 'local' and CONFIG.captcha_llm_enabled and reason == 'isBot':
+            result['answer'] = text
+            item['session'] = session
+            return _queue_local_captcha_retry(state.acc, cid, item, coord, result)
+        return result
+    finally:
+        # A rejected local answer can transfer ownership to the worker. Every
+        # other completed/failed/superseded GUI request closes its session here.
+        owner = getattr(coord, 'pending', {}).get(cid, {})
+        if session is not None and owner.get('session') is not session:
+            with suppress(Exception):
+                session.close()
+            if item.get('session') is session:
+                item['session'] = None
 
 
 @router.get('/api/captcha/journal')
 async def api_captcha_journal(days: int = 7):
     from app.captcha_journal import summary
     return summary(max(1, min(days, 60)))
+
+
+@router.get('/api/captcha/attempts')
+def api_captcha_attempts(limit: int = 20):
+    from app.captcha_history import list_attempts
+    return {'ok': True, 'attempts': list_attempts(limit)}
+
+
+@router.get('/api/captcha/samples/{filename}')
+def api_captcha_sample(filename: str):
+    from app.captcha_history import sample_path
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    try:
+        path = sample_path(filename)
+    except ValueError:
+        raise HTTPException(status_code=404, detail='Образец капчи не найден')
+    return FileResponse(path, media_type='image/png', headers={
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
 
 
 @router.post('/api/account/{idx}/captcha/refresh')
@@ -332,6 +516,7 @@ async def api_account_captcha_refresh(idx: int):
         if now < getattr(state, '_captcha_probe_after', 0):
             return {'ok': False, 'error': 'Повторная проверка доступна через 10 секунд'}
         state._captcha_probe_after = now + 10
+        expected_id = captcha.current(state.acc).get('id')
     def probe():
         headers = _oauth_headers(state.acc)
         if not headers:
@@ -342,8 +527,16 @@ async def api_account_captcha_refresh(idx: int):
             payload = response.json()
         except ValueError:
             payload = None
-        captcha.capture(state.acc, response.status_code, payload)
-        return {'ok': True, 'message': 'Проверка API выполнена без отклика. Пауза сохранена; успешный ответ не подтверждает снятие капчи.'}
+        with state._state_lock, captcha.LOCK:
+            if state._deleted or captcha.current(state.acc).get('id') != expected_id:
+                return {'ok': False, 'error': 'Проверка изменилась во время запроса. Обновите карточку.'}
+            details = captcha.capture(state.acc, response.status_code, payload)
+            replaced = captcha.current(state.acc).get('id') != expected_id
+        return {'ok': True, 'probe_status': response.status_code,
+                'challenge_received': bool(details), 'challenge_replaced': replaced,
+                'message': ('HH выдал новую проверку. Локальная модель обработает её автоматически.'
+                            if replaced and CONFIG.captcha_llm_enabled else
+                            'Проверка API выполнена без отклика. Пауза сохранена; успешный ответ не подтверждает снятие капчи.')}
     try:
         return await asyncio.to_thread(probe)
     except Exception:

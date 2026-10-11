@@ -6,6 +6,7 @@ import base64
 
 def paused_page(ui):
     ui.state['accounts'][0].update(paused=True, paused_reason='challenge')
+    ui.state['config']['captcha_llm_enabled'] = False
     ui.open()
     ui.page.evaluate("""() => {
         const image = document.getElementById('acc-captcha-img-0');

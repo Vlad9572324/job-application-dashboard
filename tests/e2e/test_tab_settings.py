@@ -360,6 +360,66 @@ def test_llm_profile_add_posts_profiles(ui):
     ]
 
 
+def test_captcha_mode_select_saves_manual_and_local(ui):
+    page = _boot(ui, config={'captcha_llm_enabled': True})
+    mode = page.locator('#captcha-solve-mode')
+    expect(mode).to_have_value('local')
+
+    mode.select_option('manual')
+    _wait_until(ui, lambda: any(c['path'] == '/api/settings' and
+                                 c['json'] == {'key': 'captcha_llm_enabled', 'value': False}
+                                 for c in ui.calls))
+    expect(mode).to_have_value('manual')
+    expect(page.locator('#captcha-mode-result')).to_have_text('✓ Режим сохранён')
+
+    mode.select_option('local')
+    _wait_until(ui, lambda: any(c['path'] == '/api/settings' and
+                                 c['json'] == {'key': 'captcha_llm_enabled', 'value': True}
+                                 for c in ui.calls))
+    expect(mode).to_have_value('local')
+
+
+def test_captcha_model_upload_then_select_in_settings(ui):
+    page = _boot(ui)
+    models = [{'name': 'default', 'size_bytes': 19000000}]
+    active = 'default'
+
+    def model_route(route):
+        if route.request.method == 'GET':
+            route.fulfill(json={'ok': True, 'active': active, 'models': models})
+        else:
+            assert route.request.post_data is not None
+            models.append({'name': 'v2', 'size_bytes': 12})
+            route.fulfill(json={'ok': True, 'name': 'v2', 'active': active})
+
+    def select_route(route):
+        nonlocal active
+        assert route.request.post_data_json == {'name': 'v2'}
+        active = 'v2'
+        route.fulfill(json={'ok': True, 'active': active})
+
+    page.route('**/api/captcha/models/select', select_route)
+    page.route('**/api/captcha/models', model_route)
+    page.evaluate('loadCaptchaModels()')
+    expect(page.locator('#captcha-model-select option')).to_have_count(1)
+    expect(page.locator('#captcha-model-installed')).to_contain_text('Загружена и активна: Основная модель')
+
+    page.locator('#captcha-model-name').fill('v2')
+    page.locator('#captcha-model-weights').set_input_files({
+        'name': 'model.pt', 'mimeType': 'application/octet-stream', 'buffer': b'fake-weights',
+    })
+    page.get_by_role('button', name='Загрузить модель').click()
+    expect(page.locator('#captcha-model-select')).to_have_value('v2')
+    expect(page.locator('#captcha-model-result')).to_contain_text('загружена')
+    expect(page.locator('#captcha-model-installed')).to_contain_text('Загружена и активна: Основная модель')
+
+    page.get_by_role('button', name='Выбрать модель').click()
+    expect(page.locator('#captcha-model-result')).to_contain_text('Активная модель: v2')
+    expect(page.locator('#captcha-model-installed')).to_contain_text('Загружена и активна: v2')
+    page.evaluate('loadCaptchaModels()')
+    expect(page.locator('#captcha-model-installed')).to_contain_text('Загружена и активна: v2')
+
+
 def test_llm_profile_remove_posts_remaining_profiles(ui):
     page = _boot(
         ui,

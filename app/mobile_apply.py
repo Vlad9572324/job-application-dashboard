@@ -26,6 +26,7 @@ from app.hh_mobile_transport import (
     mobile_request,
 )
 from app.logging_utils import log_debug
+from app.gender_guard import conflicting_gender_words
 from app.mobile_related import get_suitable_resumes
 
 # Известные бизнес-коды отказа POST /negotiations (APK VR/f.java,
@@ -166,6 +167,9 @@ def submit_response(acc: dict, vacancy_id: str, resume_id: str,
     if blocked(acc, vacancy_id):
         return {"ok": False, "error_type": "outcome_unknown",
                 "error": "Previous application outcome is unknown; retry blocked"}
+    if conflicting_gender_words(message):
+        return {"ok": False, "error_type": "gender_mismatch",
+                "error": "Cover letter gender conflicts with applicant setting"}
     resume_id = pick_suitable_resume(acc, vacancy_id, resume_id)
     if resume_id is None:
         return {
