@@ -63,7 +63,7 @@ def _docker_available() -> bool:
 
 def test_container_bind_docker_compose_smoke():
     """`docker compose up hh-bot` → curl 127.0.0.1:8000 → `compose down`."""
-    if not _docker_available():
+    if not _docker_available() or not (ROOT / '.env').is_file():
         # В обычном dev/CI без Docker всё равно проверяем критичный контракт
         # compose: публикация только на host loopback и opt-in container bind.
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")

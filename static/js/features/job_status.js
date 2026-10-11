@@ -174,6 +174,8 @@
       if (!r.ok || d.ok === false) {
         throw new Error(d.error || d.detail || `HTTP ${r.status}`);
       }
+      // An older diagnostics request must not overwrite the status just saved.
+      JobStatusState.reqSeq += 1;
       const label = d.label || statusSel?.selectedOptions?.[0]?.text || status;
       jsResult('✅ ' + label);
       const cur = jsEl('job-status-current');

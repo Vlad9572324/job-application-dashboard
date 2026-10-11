@@ -160,7 +160,8 @@ class MobileHHClient(HHClient):
             hit = _CHAT_CACHE.get(key)
             if hit and now - hit[0] < CHAT_CACHE_TTL_SEC and hit[1] >= max_pages:
                 return copy.deepcopy(hit[2])
-            full = now - _CHAT_FULL_SWEEP_AT.get(key, 0.0) >= CHAT_FULL_SWEEP_SEC
+            last_full = _CHAT_FULL_SWEEP_AT.get(key)
+            full = last_full is None or now - last_full >= CHAT_FULL_SWEEP_SEC
             result = self._fetch_chat_list_uncached(max_pages, unread_pages=20 if full else 3)
             if full:
                 _CHAT_FULL_SWEEP_AT[key] = time.monotonic()
