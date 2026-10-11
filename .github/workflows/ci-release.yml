@@ -77,7 +77,10 @@ jobs:
           status=$?
           cat smoke.log
           if [ "$status" -ne 0 ]; then
-            details=$(tail -n 3 smoke.log | tr '\n' ' ' | cut -c1-1000)
+            details=$(grep -E '^[[:alnum:]_.]*(Error|Exception):' smoke.log | tail -n 1)
+            if [ -z "$details" ]; then
+              details=$(tail -n 10 smoke.log | tr '\n' ' ' | cut -c1-1000)
+            fi
             echo "::error title=Binary smoke failure::$details"
           fi
           exit "$status"
