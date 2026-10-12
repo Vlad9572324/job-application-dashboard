@@ -12,7 +12,7 @@
 > Проект автоматизирует действия на hh.ru. Вы самостоятельно отвечаете за
 > соблюдение правил сервиса, корректность откликов и сохранность своих данных.
 
-## Что нового в 1.0.0
+## Возможности
 
 - Завершены Phase 0–5 миграции на mobile API: единый `HHClient`, OAuth Bearer,
   SMS/email OTP, мобильные чаты, отклики, резюме и сервисные операции.
@@ -27,15 +27,15 @@
 
 ## Быстрый старт
 
-```bash
-git clone https://github.com/Vlad9572324/hh.ru-clicker.git
-cd hh.ru-clicker
-docker-compose up -d --build
-```
+Скачайте [последний релиз](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest)
+для [Linux x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/download/v1.0.2/hh-clicker-linux-x64.tar.gz)
+или [Windows x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/download/v1.0.2/hh-clicker-windows-x64.zip),
+распакуйте и запустите `hh-clicker` или `hh-clicker.exe`. Затем откройте
+<http://127.0.0.1:8000>. Для Docker используйте [готовый образ и инструкцию](docs/RELEASE.md#запуск-docker-образа).
 
-Откройте <http://localhost:8000>. Порт по умолчанию опубликован только на
-loopback. Для сетевого доступа сначала прочитайте [руководство по
-безопасности](docs/SECURITY.md).
+При запуске из исходников `docker compose` требует локальный `.env` с
+`HH_BOT_API_KEY` и публикует порт 8000 в локальную сеть. Перед этим прочитайте
+[руководство по безопасности](docs/SECURITY.md).
 
 ### Подключение аккаунта через SMS OTP
 
@@ -87,9 +87,11 @@ pytest -q
 
 ## Релизы
 
-CI проверяет PR и `main`. После публикации тега `vX.Y.Z` workflow собирает
-бинарники Linux и Windows, Docker-образ в GHCR и GitHub Release. Порядок
-публикации и запуска: [docs/RELEASE.md](docs/RELEASE.md).
+CI проверяет PR и `main`. Для тега `vX.Y.Z` workflow проверяет приложение,
+собирает бинарники Linux и Windows, публикует Docker-образ в GHCR и создаёт
+GitHub Release. Актуальный выпуск — [v1.0.2](https://github.com/Vlad9572324/hh.ru-clicker/releases/tag/v1.0.2).
+Установка, проверка контрольных сумм и порядок публикации описаны в
+[docs/RELEASE.md](docs/RELEASE.md).
 
 ## Документация
 

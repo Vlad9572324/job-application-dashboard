@@ -156,8 +156,8 @@ feat(ui): runtime-editor прокси через /api/proxy/set
 
 ## 4. Тестирование
 
-**pytest — основной gate.** CI нет (`.github/workflows` отсутствует),
-`pytest` является и локальной, и фактической проверкой качества. Дополнительно
+**pytest — основной gate.** [CI](../.github/workflows/ci-release.yml) запускает
+его для PR, `main` и релизных тегов. Дополнительно
 есть GUI e2e-сьют на Playwright: `tests/e2e/` (всё мокается: aiohttp-сервер
 со static + мок-WebSocket, `/api/**` перехватывается через `page.route`;
 наружу не уходит ни одного запроса). Контракт фикстур (`static_url`,
@@ -177,7 +177,7 @@ python3 -m pytest tests/e2e      # GUI e2e (нужен playwright + браузе
 известный DeprecationWarning FastAPI `on_event`. Ничего дополнительно
 конфигурировать не нужно.
 
-Текущий сьют: `tests/` (34 файла `test_*.py`, **160 passed, 1 skipped**, прогон ~1 с).
+Текущий сьют: `tests/`; точное число тестов и итог запуска показывает CI.
 Общие фикстуры — `tests/conftest.py` (sys.path до корня + `tmp_data_dir`,
 которая уводит запись в tmp вместо реального `data/`). Таблица покрытия с
 историей регрессов — `tests/README.md`.
@@ -216,14 +216,15 @@ python web_app.py
 
 Или Docker (Dockerfile + docker-compose.yml; образ `python:3.11-slim`,
 в compose также поднимается sing-box sidecar-прокси и монтируются `./data`,
-`./app`, `./static`, `./web_app.py`):
+`./app`, `./static`, `./web_app.py`). Для Compose подготовьте `.env` с
+`HH_BOT_API_KEY`: конфигурация публикует порт 8000 в локальную сеть.
 
 ```bash
 docker compose up --build
 ```
 
 Полезные env: `HH_BOT_PORT` (8000 по умолчанию), `HH_BOT_HOST` (по умолчанию
-только loopback; наружу — лишь с `HH_BOT_UNSAFE_EXPOSE=1` и лучше с
+только loopback; наружу — лишь с `HH_BOT_UNSAFE_EXPOSE=1` и обязательным
 `HH_BOT_API_KEY`), `HH_PROXY`, `LLM_PROXY` (детали в README.md).
 Для TUI-инструментов есть отдельный `requirements-tui.txt` (web_app.py он
 не нужен).
@@ -246,5 +247,7 @@ docker compose up --build
 
 - **Линтер не настроен**: нет конфигов ruff/mypy/flake8/pre-commit — формат и
   стиль держатся на review. Не добавляйте линтер-конфиги в PR без обсуждения.
-- **CI нет** (`.github/workflows` отсутствует) — прогон `pytest` перед пушем
-  на вас: `python3 -m pytest` должен быть зелёным.
+- **CI работает** на PR и коммитах в `main`: устанавливает зависимости,
+  запускает `pytest` и GUI тесты Playwright. Релизный тег дополнительно собирает
+  Linux и Windows бинарники, проверяет их запуск и публикует Docker-образ и
+  GitHub Release. Перед пушем локально запустите `python3 -m pytest`.
