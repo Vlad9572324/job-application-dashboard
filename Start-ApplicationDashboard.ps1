@@ -28,14 +28,13 @@ if ($ExposeLan) {
     $env:HH_BOT_API_KEY = (Get-Content -LiteralPath $ApiKeyFile -Raw).Trim()
   }
   if (-not $env:HH_BOT_API_KEY) {
-    throw "HH_BOT_API_KEY is required when exposing HH Clicker outside loopback."
+    throw "HH_BOT_API_KEY is required when exposing the dashboard outside loopback."
   }
 }
 $AppUrl = if ($env:HH_BOT_API_KEY) { "$Url/?key=$($env:HH_BOT_API_KEY)" } else { $Url }
 
 $existing = Get-CimInstance Win32_Process |
   Where-Object {
-    ($_.CommandLine -like "*hh.ru-clicker*web_app.py*") -or
     ($_.ExecutablePath -like "$Root\.venv\Scripts\python.exe" -and $_.CommandLine -like "*web_app.py*")
   }
 
@@ -63,7 +62,7 @@ for ($i = 0; $i -lt 30; $i += 1) {
 
 if ($ready) {
   Start-Process $AppUrl
-  Write-Host "HH Clicker is running at $AppUrl"
+  Write-Host "Application dashboard is running at $AppUrl"
   if ($ExposeLan) {
     $lanIps = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
       Where-Object { $_.IPAddress -notlike "127.*" -and $_.PrefixOrigin -ne "WellKnown" } |
@@ -83,7 +82,7 @@ if ($ready) {
     }
   }
 } else {
-  Write-Host "HH Clicker did not become ready. Check:"
+  Write-Host "Application dashboard did not become ready. Check:"
   Write-Host $ErrLog
   exit 1
 }

@@ -1,4 +1,4 @@
-# Аудит hh.ru-clicker — отчёт
+# Аудит job-application-dashboard — отчёт
 
 Многосторонний аудит web-приложения (FastAPI dashboard + WebSocket + bg workers). Источники: 4 независимых LLM-агента, 3 раунда.
 

@@ -1,4 +1,4 @@
-# CONTRIBUTING — как вносить изменения в hh.ru-clicker
+# CONTRIBUTING — как вносить изменения в job-application-dashboard
 
 Коротко о проекте: FastAPI-дашборд (`web_app.py` + `app/*.py`, `app/routes/*.py`)
 для автоматизации hh.ru; фронтенд — vanilla JS + CSS в `static/` **без build-step**;
@@ -82,7 +82,7 @@
 
 | Ветка | Назначение |
 |---|---|
-| `main` | Стабильная версия, зеркалит `origin/main` (remote: `git@github.com:Vlad9572324/hh.ru-clicker.git`). Прямые пуши нежелательны — через PR. |
+| `main` | Стабильная версия, зеркалит `origin/main` (remote: `git@github.com:Vlad9572324/job-application-dashboard.git`). Прямые пуши нежелательны — через PR. |
 | `refactor/mobile-api` | Текущий рефакторинг: абстракция HHClient (web/mobile). Базируется на `main`; мержится обратно в `main` по завершении фаз. |
 | `pr-N` (`pr-11`, `pr-12`, `pr20`, …) | Фиче-ветки под конкретные PR. Историческое замечание: именование неконсистентно (`pr-11` vs `pr20`); новые ветки заводите как `pr-<номер>`. |
 

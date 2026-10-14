@@ -38,7 +38,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 DEFAULT_BASE_URL = "https://api.hh.ru"
 TOKENS_PATH = Path("data") / "oauth_tokens.json"
-USER_AGENT_BASE = "hh-clicker/1.0"
+USER_AGENT_BASE = "job-application-dashboard/1.0"
 USER_AGENT_MOBILE = "ru.hh.android/26.28.1"
 
 # 10 эндпоинтов для health-check (только GET).

@@ -1,6 +1,6 @@
 # API_REFERENCE — HHClient (Phase 0 mobile-api рефакторинга)
 
-Reference для разработчиков hh.ru-clicker: как использовать доменный клиент
+Reference для разработчиков job-application-dashboard: как использовать доменный клиент
 `HHClient` в новом коде. Порядок методов — как в `app/hh_client.py`.
 
 Источники:
@@ -778,7 +778,7 @@ Mobile (реализовано): `GET https://api.hh.ru/me?with_user_statuses=tr
 ### Группа E — OAuth-extras
 
 Общая реализация для web и mobile: делегирование в `app/oauth.py` (Bearer
-api.hh.ru, UA `hh-clicker/1.0`); токены добываются/рефрешатся через
+api.hh.ru, UA `job-application-dashboard/1.0`); токены добываются/рефрешатся через
 `oauth._obtain_oauth_token`. Ошибки транспорта → пустые значения, не
 исключения.
 

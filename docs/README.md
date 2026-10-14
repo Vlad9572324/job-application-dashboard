@@ -1,7 +1,7 @@
-# Документация hh.ru-clicker
+# Документация job-application-dashboard
 
 Индекс документации проекта. Актуальный выпуск —
-[v1.0.2](https://github.com/Vlad9572324/hh.ru-clicker/releases/tag/v1.0.2).
+[последний релиз](https://github.com/Vlad9572324/job-application-dashboard/releases/latest).
 
 ## Для юзеров бота
 

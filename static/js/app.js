@@ -46,7 +46,8 @@ const T = {
     tab_tests: '🧪 Тесты',
     tab_questionnaire_history: '🧾 История тестовых откликов',
     tab_db: '📂 База',
-    tab_hh: '🎯 HH Статус',
+    tab_hh: '🎯 Статус аккаунта',
+    independent_notice: 'Неофициальный инструмент для работы с hh.ru. Проект не связан с ООО «Хэдхантер» и не одобрен им.',
     tab_views: '👁️ Просмотры',
     tab_apply: '🚀 Отклик',
     tab_settings: '⚙️ Настройки',
@@ -270,8 +271,10 @@ const T = {
     notif_cookies: '⚠️ Куки протухли — ',
     notif_cookies_body: 'Обновите куки в настройках аккаунта',
     // Page titles
-    title_limit: '🚫 ЛИМИТ | HH Bot',
-    title_paused: '⏸ Пауза | HH Bot',
+    title_limit: '🚫 ЛИМИТ | Панель откликов',
+    title_paused: '⏸ Пауза | Панель откликов',
+    title_default: 'Панель откликов',
+    title_sent: '✅ {count} откл. | Панель откликов',
     // Confirm dialog texts
     confirm_del_acc_pre: 'Удалить аккаунт',
     confirm_del_acc_body: 'Воркер будет остановлен.',
@@ -315,7 +318,8 @@ const T = {
     tab_tests: '🧪 Tests',
     tab_questionnaire_history: '🧾 Test application history',
     tab_db: '📂 Database',
-    tab_hh: '🎯 HH Status',
+    tab_hh: '🎯 Account status',
+    independent_notice: 'Independent tool for hh.ru. Not affiliated with or endorsed by HeadHunter.',
     tab_views: '👁️ Views',
     tab_apply: '🚀 Apply',
     tab_settings: '⚙️ Settings',
@@ -539,8 +543,10 @@ const T = {
     notif_cookies: '⚠️ Cookies expired — ',
     notif_cookies_body: 'Update cookies in account settings',
     // Page titles
-    title_limit: '🚫 LIMIT | HH Bot',
-    title_paused: '⏸ Paused | HH Bot',
+    title_limit: '🚫 LIMIT | Application Dashboard',
+    title_paused: '⏸ Paused | Application Dashboard',
+    title_default: 'Application Dashboard',
+    title_sent: '✅ {count} sent | Application Dashboard',
     // Confirm dialog texts
     confirm_del_acc_pre: 'Delete account',
     confirm_del_acc_body: 'Worker will be stopped.',
@@ -3961,9 +3967,9 @@ function updatePageTitle(snap) {
   } else if (snap.paused) {
     document.title = t('title_paused');
   } else if (sent > 0) {
-    document.title = `✅ ${sent} откл. | HH Bot`;
+    document.title = t('title_sent').replace('{count}', sent);
   } else {
-    document.title = 'HH Bot Dashboard';
+    document.title = t('title_default');
   }
 }
 
@@ -6538,7 +6544,7 @@ async function diagDownload(btn) {
   const a = document.createElement('a');
   const stamp = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
   a.href = url;
-  a.download = `hh-bot-diag-${stamp}.txt`;
+  a.download = `application-dashboard-diag-${stamp}.txt`;
   a.click();
   URL.revokeObjectURL(url);
 }

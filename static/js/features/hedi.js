@@ -64,7 +64,7 @@ function hediRender(messages) {
   box.replaceChildren();
   if (!messages.length) {
     const empty = document.createElement('div'); empty.className = 'hedi-empty';
-    empty.textContent = 'История пуста. Спросите Хэдди о подходящих вакансиях.'; box.appendChild(empty); return;
+    empty.textContent = 'История пуста. Спросите помощника о подходящих вакансиях.'; box.appendChild(empty); return;
   }
   messages.forEach(msg => {
     const user = msg.sender === 'applicant';

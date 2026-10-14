@@ -439,7 +439,7 @@ class MobileHHClient(HHClient):
                 headers={
                     # Тот же UA, что app/oauth.py использует для api.hh.ru
                     # (см. oauth._oauth_headers).
-                    "User-Agent": "hh-clicker/1.0",
+                    "User-Agent": "job-application-dashboard/1.0",
                     "Authorization": f"Bearer {token}",
                 },
                 # split-egress: api.hh.ru тоже обязан идти через HH_PROXY.

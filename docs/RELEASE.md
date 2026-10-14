@@ -1,15 +1,15 @@
 # CI и релизы
 
-Актуальный выпуск доступен на [странице релизов](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest).
+Актуальный выпуск доступен на [странице релизов](https://github.com/Vlad9572324/job-application-dashboard/releases/latest).
 
 Workflow [CI and release](../.github/workflows/ci-release.yml) запускает Python и GUI
 тесты для PR, коммитов в `main` и тегов `v*`. Тег вида `vX.Y.Z` или
 `vX.Y.Z-rc.1` на коммите из `main` после успешных тестов создаёт:
 
-- [hh-clicker-linux-x64.tar.gz](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest/download/hh-clicker-linux-x64.tar.gz) — Linux x64;
-- [hh-clicker-windows-x64.zip](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest/download/hh-clicker-windows-x64.zip) — Windows x64;
-- [SHA256SUMS.txt](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest/download/SHA256SUMS.txt) — контрольные суммы архивов;
-- [Docker-образ](https://github.com/Vlad9572324/hh.ru-clicker/pkgs/container/hh.ru-clicker) `ghcr.io/vlad9572324/hh.ru-clicker:<версия>` в GitHub Packages.
+- [job-application-dashboard-linux-x64.tar.gz](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-linux-x64.tar.gz) — Linux x64;
+- [job-application-dashboard-windows-x64.zip](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-windows-x64.zip) — Windows x64;
+- [SHA256SUMS.txt](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/SHA256SUMS.txt) — контрольные суммы архивов;
+- [Docker-образ](https://github.com/Vlad9572324/job-application-dashboard/pkgs/container/job-application-dashboard) `ghcr.io/vlad9572324/job-application-dashboard:<версия>` в GitHub Packages.
 
 Архивы и контрольные суммы прикладываются к GitHub Release. Стабильный тег
 обновляет также Docker-тег `latest`.
@@ -22,14 +22,14 @@ Workflow [CI and release](../.github/workflows/ci-release.yml) запускае�
 
 Скачайте архив для своей системы и `SHA256SUMS.txt` из одного релиза. В Linux
 проверьте свой архив командой
-`grep ' hh-clicker-linux-x64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`.
+`grep ' job-application-dashboard-linux-x64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`.
 В Windows сверьте значение
-`Get-FileHash .\hh-clicker-windows-x64.zip -Algorithm SHA256` со
+`Get-FileHash .\job-application-dashboard-windows-x64.zip -Algorithm SHA256` со
 строкой для Windows архива в `SHA256SUMS.txt`.
 
-Распакуйте архив и запускайте `./hh-clicker` (Linux) или `hh-clicker.exe`
+Распакуйте архив и запускайте `./job-application-dashboard` (Linux) или `job-application-dashboard.exe`
 (Windows). Откройте `http://127.0.0.1:8000`. Приложение хранит настройки,
-аккаунты и историю в папке `data/` рядом с исполняемым файлом. Для локальной
+аккаунты и историю в папке `data/` рядом с исполняемым файлом.
 Основная CAPTCHA-модель (`models/captcha/model.pt` и `charset.txt`) уже входит
 в архив. Дополнительные модели можно загрузить через интерфейс.
 Личные данные в архивы не включены.
@@ -40,23 +40,26 @@ Workflow [CI and release](../.github/workflows/ci-release.yml) запускае�
 
 ## Запуск Docker-образа
 
-На Linux из каталога с локальными `data/`, `models/` и `.env`:
+На Linux из каталога с локальными `data/` и `.env`:
 
 ```bash
-mkdir -p data models/captcha
-docker run --name hh-clicker --rm \
+mkdir -p data
+docker run --name job-application-dashboard --rm \
   --user "$(id -u):$(id -g)" \
   --env-file .env \
   -e HH_BOT_HOST=0.0.0.0 -e HH_BOT_ALLOW_CONTAINER_BIND=1 \
   -p 127.0.0.1:8000:8000 \
-  -v "$PWD/data:/app/data" -v "$PWD/models:/app/models" \
-  ghcr.io/vlad9572324/hh.ru-clicker:latest
+  -v "$PWD/data:/app/data" \
+  ghcr.io/vlad9572324/job-application-dashboard:latest
 ```
 
 В `.env` нужен `HH_BOT_API_KEY`. Контейнер доступен только с хоста через
 `127.0.0.1:8000`; внутри он слушает `0.0.0.0` для Docker DNAT. Замените
 версию образа на нужный релиз.
 Docker-образ содержит основную CAPTCHA-модель, но не данные аккаунтов.
+Если нужны дополнительные загружаемые модели, подключите папку `models/`
+с правом записи и сохраните в ней основную модель до монтирования: bind mount
+скрывает файлы, встроенные в образ.
 
 ## Публикация
 
@@ -72,5 +75,5 @@ git push origin vX.Y.Z
 
 Замените `X.Y.Z` на новую версию. Публикация выполняется только после успешных
 тестов и проверок запуска Linux и Windows бинарников. Проверяйте статус в
-[GitHub Actions](https://github.com/Vlad9572324/hh.ru-clicker/actions/workflows/ci-release.yml);
+[GitHub Actions](https://github.com/Vlad9572324/job-application-dashboard/actions/workflows/ci-release.yml);
 локальное создание тега без отправки ничего не публикует.

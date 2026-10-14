@@ -623,7 +623,7 @@ def _extract_openclaw_text(raw: str) -> str:
 
 
 def _run_openclaw_prompt(prompt: str, account_key: str, kind: str) -> str:
-    agent = (getattr(CONFIG, "llm_openclaw_agent", "") or "hh-clicker").strip()
+    agent = (getattr(CONFIG, "llm_openclaw_agent", "") or "main").strip()
     model = (getattr(CONFIG, "llm_openclaw_model", "") or "").strip()
     base_timeout = max(20, int(getattr(CONFIG, "llm_openclaw_timeout", 120) or 120))
     timeout = min(base_timeout, 60 if kind == "reply" else 45)

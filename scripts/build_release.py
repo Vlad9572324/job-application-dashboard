@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "build" / "release"
+APP_NAME = "job-application-dashboard"
 
 
 def main():
@@ -29,21 +30,21 @@ def main():
 
     subprocess.run([
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
-        "--name", "hh-clicker", "--collect-submodules", "app",
+        "--name", APP_NAME, "--collect-submodules", "app",
         "--collect-submodules", "uvicorn", "--collect-data", "tzdata",
         "--distpath", str(OUT),
         "--workpath", str(ROOT / "build" / "pyinstaller"),
         "--specpath", str(ROOT / "build"), str(ROOT / "web_app.py"),
     ], cwd=ROOT, check=True)
 
-    bundle = OUT / "hh-clicker"
+    bundle = OUT / APP_NAME
     shutil.copytree(ROOT / "static", bundle / "static", dirs_exist_ok=True)
     model_dir = bundle / "models" / "captcha"
     model_dir.mkdir(parents=True, exist_ok=True)
     for name in ("model.pt", "charset.txt"):
         shutil.copy2(ROOT / "models" / "captcha" / name, model_dir / name)
     (bundle / "README.txt").write_text(
-        "Run hh-clicker.exe on Windows or ./hh-clicker on Linux.\n"
+        f"Run {APP_NAME}.exe on Windows or ./{APP_NAME} on Linux.\n"
         "Open http://127.0.0.1:8000 in your browser.\n"
         "Your settings and accounts are stored in data/ beside the executable.\n"
         "Set HH_BOT_API_KEY in the environment before allowing network access.\n"
@@ -51,15 +52,15 @@ def main():
         encoding="utf-8")
 
     if args.platform == "linux-x64":
-        archive = OUT / "hh-clicker-linux-x64.tar.gz"
+        archive = OUT / f"{APP_NAME}-linux-x64.tar.gz"
         with tarfile.open(archive, "w:gz") as tf:
-            tf.add(bundle, arcname="hh-clicker")
+            tf.add(bundle, arcname=APP_NAME)
     else:
-        archive = OUT / "hh-clicker-windows-x64.zip"
+        archive = OUT / f"{APP_NAME}-windows-x64.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             for path in sorted(bundle.rglob("*")):
                 if path.is_file():
-                    zf.write(path, Path("hh-clicker") / path.relative_to(bundle))
+                    zf.write(path, Path(APP_NAME) / path.relative_to(bundle))
     print(archive)
 
 

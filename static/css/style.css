@@ -35,6 +35,13 @@ body {
   z-index: 100;
 }
 #header h1 { font-size: 15px; font-weight: 700; color: var(--cyan); }
+#independent-notice {
+  padding: 5px 16px;
+  color: var(--dim);
+  background: var(--bg-card2);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
 #conn-dot {
   width: 10px; height: 10px; border-radius: 50%;
   background: var(--red); transition: background 0.3s;
@@ -82,7 +89,7 @@ body {
 .panel { display: none; padding: 16px; }
 .panel.active { display: block; }
 
-/* ── HH AI Hedi chat ── */
+/* ── Assistant chat ── */
 .hedi-shell { max-width: 900px; margin: 0 auto; }
 .hedi-toolbar { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:12px; }
 .hedi-title { color:var(--cyan); font-size:17px; font-weight:700; margin-bottom:5px; }

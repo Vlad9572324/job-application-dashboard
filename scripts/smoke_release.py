@@ -16,7 +16,7 @@ def main():
     parser.add_argument("--bundle", type=Path, required=True)
     args = parser.parse_args()
     bundle = args.bundle.resolve()
-    executable = bundle / ("hh-clicker.exe" if os.name == "nt" else "hh-clicker")
+    executable = bundle / ("job-application-dashboard.exe" if os.name == "nt" else "job-application-dashboard")
     if (not executable.is_file() or not (bundle / "static" / "index.html").is_file()
             or not (bundle / "models" / "captcha" / "model.pt").is_file()
             or not (bundle / "models" / "captcha" / "charset.txt").is_file()):

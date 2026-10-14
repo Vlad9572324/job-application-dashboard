@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HH Bot Dashboard</title>
+<title>Панель откликов</title>
 <link rel="stylesheet" href="/static/css/style.css?v=captcha-history-1">
 <link rel="stylesheet" href="/static/css/theme-autoclicker.css">
 <!-- UI integrations (feat1..feat8) -->
@@ -21,7 +21,7 @@
 <!-- Header -->
 <div id="header">
   <div id="conn-dot" title="WebSocket connection"></div>
-  <h1>🤖 HH Bot Dashboard</h1>
+  <h1>Панель откликов</h1>
   <div style="color:var(--dim);font-size:11px">
     🔍 <span id="global-found">0</span> <span data-i18n="hdr_found">найдено</span> &nbsp;
     ✅ <span id="global-sent">0</span> <span data-i18n="hdr_replies">откликов</span>
@@ -42,6 +42,7 @@
   <span id="apply-mode-badge" style="padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer" onclick="sendCmd({type:'set_config',key:'use_oauth_apply',value:!State.lastSnapshot?.config?.use_oauth_apply})" title="Клик — переключить метод откликов"></span>
   <span id="reviews-to-rate-badge" style="display:none;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;background:rgba(255,180,0,0.12);border:1px solid var(--yellow);color:var(--yellow)" title="Работодатели, которых можно оценить (mobile /employer_reviews/employers_to_rate)"></span>
 </div>
+<div id="independent-notice" data-i18n="independent_notice">Неофициальный инструмент для работы с hh.ru. Проект не связан с ООО «Хэдхантер» и не одобрен им.</div>
 
 <!-- Tabs -->
 <div id="tabs">
@@ -51,11 +52,11 @@
   <div class="tab" data-tab="tests" data-i18n="tab_tests">🧪 Тесты</div>
   <div class="tab" data-tab="questionnaire-history" data-i18n="tab_questionnaire_history">🧾 История тестовых откликов</div>
   <div class="tab" data-tab="db" data-i18n="tab_db">📂 База</div>
-  <div class="tab" data-tab="hh" data-i18n="tab_hh">🎯 HH Статус</div>
+  <div class="tab" data-tab="hh" data-i18n="tab_hh">🎯 Статус аккаунта</div>
   <div class="tab" data-tab="views" data-i18n="tab_views">👁️ Просмотры</div>
   <div class="tab" data-tab="apply" data-i18n="tab_apply">🚀 Отклик</div>
   <div class="tab" data-tab="llm" data-i18n="tab_llm">🤖 LLM Ответы</div>
-  <div class="tab" data-tab="hedi">🤖 HH Хэдди</div>
+  <div class="tab" data-tab="hedi">🤖 Помощник</div>
   <div class="tab" data-tab="settings" data-i18n="tab_settings">⚙️ Настройки</div>
 </div>
 
@@ -468,7 +469,7 @@
     <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="POST /shards/hhpro_ai_letter — 1 бесплатное AI-письмо на пару резюме×вакансия даже без HH-Pro.">
       <input type="checkbox" id="hh-ai-letter-first-try-main" style="accent-color:var(--yellow,#fbbf24)" checked
              onchange="sendCmd({type:'set_config',key:'hh_ai_letter_first_try',value:this.checked})">
-      ✍️ HH AI-letter (перед шаблоном)
+      ✍️ Письмо с ИИ (перед шаблоном)
     </label>
     <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="GET /shards/vacancy/related_vacancies — HH-рекомендательный фид. Раз в цикл сбора мержим в пул.">
       <input type="checkbox" id="related-vacancies-enabled-main" style="accent-color:var(--cyan,#22d3ee)" checked
@@ -516,13 +517,13 @@
   </div>
 </div>
 
-<!-- HH AI Hedi Tab -->
+<!-- Assistant chat tab -->
 <div id="panel-hedi" class="panel">
   <div class="hedi-shell">
     <div class="hedi-toolbar">
       <div>
-        <div class="hedi-title">🤖 HH Хэдди</div>
-        <div class="hedi-badge">Bot: Хэдди · powered by HH.ru AI</div>
+        <div class="hedi-title">🤖 Помощник</div>
+        <div class="hedi-badge">Чат через аккаунт hh.ru</div>
       </div>
       <div class="hedi-controls">
         <label for="hedi-account">Аккаунт</label>
@@ -536,7 +537,7 @@
     <div id="hedi-messages" class="hedi-messages" aria-live="polite"></div>
     <div class="hedi-compose">
       <textarea id="hedi-input" class="apply-input" rows="3" maxlength="4000"
-        placeholder="Напишите Хэдди…"></textarea>
+        placeholder="Напишите сообщение…"></textarea>
       <button id="hedi-send" type="button" onclick="hediSendMessage()">Отправить</button>
     </div>
   </div>

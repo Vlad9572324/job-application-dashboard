@@ -1,4 +1,4 @@
-# Troubleshooting — hh.ru-clicker (web-flow + mobile API)
+# Troubleshooting — job-application-dashboard (web-flow + mobile API)
 
 Руководство по диагностике и починке типовых проблем дашборда. Два канала к HH:
 
@@ -357,7 +357,7 @@ DDoS-Guard перед HH фингерпринтит клиента по JA3/JA4 
 владельца каталогу данных и пересоберите сервис:
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" /home/user/clicker/hh.ru-clicker/data
+sudo chown -R "$(id -u):$(id -g)" ./data
 docker compose up -d --build
 ```
 

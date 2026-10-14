@@ -109,7 +109,7 @@ async def _lifespan(_app: FastAPI):
         log_debug(f"lifespan save_executor shutdown error: {e}")
 
 
-app = FastAPI(title="HH Bot Dashboard", lifespan=_lifespan)
+app = FastAPI(title="Панель откликов", lifespan=_lifespan)
 
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)

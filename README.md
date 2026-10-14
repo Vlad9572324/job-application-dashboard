@@ -1,13 +1,16 @@
-# HH Bot Dashboard
+# Панель откликов
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-39d0d8?style=flat-square)](https://www.python.org)
-[![CI](https://github.com/Vlad9572324/hh.ru-clicker/actions/workflows/ci-release.yml/badge.svg)](https://github.com/Vlad9572324/hh.ru-clicker/actions/workflows/ci-release.yml)
-[![Clients](https://img.shields.io/badge/HH-web%20%7C%20mobile%20%7C%20auto-b967ff?style=flat-square)](app/hh_client_factory.py)
+[![CI](https://github.com/Vlad9572324/job-application-dashboard/actions/workflows/ci-release.yml/badge.svg)](https://github.com/Vlad9572324/job-application-dashboard/actions/workflows/ci-release.yml)
+[![Clients](https://img.shields.io/badge/client-web%20%7C%20mobile%20%7C%20auto-b967ff?style=flat-square)](app/hh_client_factory.py)
 [![WebSocket](https://img.shields.io/badge/realtime-WebSocket-00f0ff?style=flat-square)](app/ws_client.py)
 
 Локальный веб-дашборд для автоматизации работы соискателя на hh.ru: поиск и
 отклики, LLM-ответы рекрутерам, опросники, аналитика резюме и управление
 несколькими аккаунтами.
+
+**Неофициальный проект.** Не связан с ООО «Хэдхантер» и не одобрен им.
+Упоминание hh.ru описывает совместимость приложения с сервисом.
 
 > Проект автоматизирует действия на hh.ru. Вы самостоятельно отвечаете за
 > соблюдение правил сервиса, корректность откликов и сохранность своих данных.
@@ -18,7 +21,7 @@
   SMS/email OTP, мобильные чаты, отклики, резюме и сервисные операции.
 - Для каждого аккаунта выбирается `web`, `mobile` или `auto`; недоступная
   mobile-операция безопасно повторяется через web там, где есть web-capability.
-- Вкладка **🤖 HH Хэдди** показывает диалоги с помощником и историю сообщений.
+- Вкладка **🤖 Помощник** показывает диалоги и историю сообщений.
 - WebSocket push обновляет чаты и счётчики без ожидания polling; polling остаётся
   запасным каналом.
 - В UI добавлены 8 интеграций: HR-ranking, pre-flight проверки, skill
@@ -27,10 +30,10 @@
 
 ## Быстрый старт
 
-Скачайте [последний релиз](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest)
-для [Linux x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest/download/hh-clicker-linux-x64.tar.gz)
-или [Windows x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest/download/hh-clicker-windows-x64.zip),
-распакуйте и запустите `hh-clicker` или `hh-clicker.exe`. Затем откройте
+Скачайте [последний релиз](https://github.com/Vlad9572324/job-application-dashboard/releases/latest)
+для [Linux x64](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-linux-x64.tar.gz)
+или [Windows x64](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-windows-x64.zip),
+распакуйте и запустите `job-application-dashboard` или `job-application-dashboard.exe`. Затем откройте
 <http://127.0.0.1:8000>. Для Docker используйте [готовый образ и инструкцию](docs/RELEASE.md#запуск-docker-образа).
 Основная локальная модель распознавания капчи уже включена в архивы и Docker-образ.
 
@@ -57,7 +60,7 @@ mobile](docs/MOBILE_MIGRATION_GUIDE.md).
 | Экран | Назначение |
 |---|---|
 | [Главная](docs/screenshots/dashboard.svg) | два аккаунта, counters и streak |
-| [HH Хэдди](docs/screenshots/hedi-chat.svg) | чат с помощником |
+| [Помощник](docs/screenshots/assistant-chat.svg) | чат с помощником |
 | [Навыки](docs/screenshots/skill-verifications.svg) | статусы подтверждения skills |
 | [Статус поиска](docs/screenshots/job-search-status.svg) | job search status аккаунта |
 | [Режим клиента](docs/screenshots/mode-selector.svg) | web/mobile/auto per account |
@@ -90,7 +93,7 @@ pytest -q
 
 CI проверяет PR и `main`. Для тега `vX.Y.Z` workflow проверяет приложение,
 собирает бинарники Linux и Windows, публикует Docker-образ в GHCR и создаёт
-GitHub Release. Список выпусков доступен на [странице релизов](https://github.com/Vlad9572324/hh.ru-clicker/releases).
+GitHub Release. Список выпусков доступен на [странице релизов](https://github.com/Vlad9572324/job-application-dashboard/releases).
 Установка, проверка контрольных сумм и порядок публикации описаны в
 [docs/RELEASE.md](docs/RELEASE.md).
 
