@@ -1,0 +1,48 @@
+name: Hide public GHCR packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/hide-public-packages.yml
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  delete-public-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the two published container packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_OWNER: ${{ github.repository_owner }}
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.error
+          import urllib.request
+
+          owner = os.environ['GH_OWNER']
+          token = os.environ['GH_TOKEN']
+          for name in ('hh.ru-clicker', 'job-application-dashboard'):
+              url = f'https://api.github.com/users/{owner}/packages/container/{name}'
+              request = urllib.request.Request(
+                  url,
+                  method='DELETE',
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2026-03-10',
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      print(f'{name}: HTTP {response.status}')
+                      if response.status != 204:
+                          raise RuntimeError(f'Unexpected response for {name}')
+              except urllib.error.HTTPError as error:
+                  print(f'{name}: HTTP {error.code}; {error.read(300).decode("utf-8", "replace")}')
+                  raise
+          PY
