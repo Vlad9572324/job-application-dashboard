@@ -261,9 +261,114 @@ def test_questionnaire_requires_confirmed_success(hh_no_proxy, monkeypatch, stat
     rec = _install_recorder(monkeypatch,
         get_resp=_RecResp(200, '<textarea name="task_1_text"></textarea>'),
         post_resp=response)
-    result, _ = _run_coro(hh_apply.fill_and_submit_questionnaire(_make_acc(), '777'))
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(_make_acc(), '777'))
     assert result == expected
+    if location == '/?withoutTest=no':
+        assert info == {"error_code": "questionnaire_rejected", "http_status": 302}
     assert [call[0] for call in rec.calls] == ['GET', 'POST']
+
+
+def test_questionnaire_already_responded_page_does_not_post(hh_no_proxy, monkeypatch):
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_fill_questionnaire', False)
+    rec = _install_recorder(monkeypatch, get_resp=_RecResp(
+        200, '<form name="vacancy_response"><div data-qa="already-responded-text">'
+             'Already responded</div></form>'))
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(_make_acc(), '777'))
+    assert (result, info) == ('already', {'reason': 'hh_already_responded'})
+    assert [call[0] for call in rec.calls] == ['GET']
+
+
+def test_questionnaire_hidden_resume_warning_does_not_post(hh_no_proxy, monkeypatch):
+    rec = _install_recorder(monkeypatch, get_resp=_RecResp(
+        200, '<form name="vacancy_response">'
+             '<div data-qa="hidden-resume-warning">Change resume visibility</div>'
+             '<div data-qa="task-question">Опыт?</div>'
+             '<textarea name="task_1_text"></textarea></form>'))
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(_make_acc(), '777'))
+    assert (result, info) == ('error', {'error_code': 'resume_visibility_restricted'})
+    assert [call[0] for call in rec.calls] == ['GET']
+
+
+def test_questionnaire_resolves_choice_label_before_preview(hh_no_proxy, monkeypatch):
+    html = ('<div data-qa="task-question">Готовы?</div>'
+            '<label><input type="radio" name="task_1" value="101">Да</label>'
+            '<label><input type="radio" name="task_1" value="102">Нет</label>')
+    rec = _install_recorder(monkeypatch, get_resp=_RecResp(200, html))
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_enabled', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_fill_questionnaire', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_use_resume', False)
+    monkeypatch.setattr(hh_apply, 'generate_llm_questionnaire_answers',
+                        lambda *args, **kwargs: {'task_1': 'Нет'})
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(
+        _make_acc(), '777', preview_only=True))
+    assert result == 'preview' and info['answers']['task_1'] == '102'
+    assert [call[0] for call in rec.calls] == ['GET']
+
+
+def test_questionnaire_does_not_submit_unresolved_choice(hh_no_proxy, monkeypatch):
+    html = ('<div data-qa="task-question">Готовы?</div>'
+            '<label><input type="radio" name="task_1" value="101">Да</label>'
+            '<label><input type="radio" name="task_1" value="102">Нет</label>')
+    rec = _install_recorder(monkeypatch, get_resp=_RecResp(200, html))
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_enabled', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_fill_questionnaire', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_use_resume', False)
+    monkeypatch.setattr(hh_apply, 'generate_llm_questionnaire_answers',
+                        lambda *args, **kwargs: {'task_1': 'Возможно'})
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(_make_acc(), '777'))
+    assert (result, info) == ('error', {'error_code': 'llm_answers_rejected'})
+    assert [call[0] for call in rec.calls] == ['GET']
+
+
+def test_questionnaire_selects_custom_option_for_custom_text(hh_no_proxy, monkeypatch):
+    html = ('<div data-qa="task-question">Другой инструмент?</div>'
+            '<label><input type="checkbox" name="task_1" value="101">Java</label>'
+            '<label><input type="checkbox" name="task_1" value="open">Свой вариант</label>'
+            '<input type="text" name="task_1_text">')
+    _install_recorder(monkeypatch, get_resp=_RecResp(200, html))
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_enabled', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_fill_questionnaire', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_use_resume', False)
+    monkeypatch.setattr(hh_apply, 'generate_llm_questionnaire_answers',
+                        lambda *args, **kwargs: {'task_1': '', 'task_1_text': 'Python'})
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(
+        _make_acc(), '777', preview_only=True))
+    assert result == 'preview'
+    assert info['answers']['task_1'] == 'open'
+    assert info['answers']['task_1_text'] == 'Python'
+
+
+def test_questionnaire_omits_custom_text_for_regular_choice(hh_no_proxy, monkeypatch):
+    html = ('<div data-qa="task-question">Инструмент?</div>'
+            '<label><input type="checkbox" name="task_1" value="101">Java</label>'
+            '<label><input type="checkbox" name="task_1" value="open">Свой вариант</label>'
+            '<input type="text" name="task_1_text">')
+    _install_recorder(monkeypatch, get_resp=_RecResp(200, html))
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_enabled', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_fill_questionnaire', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_use_resume', False)
+    monkeypatch.setattr(hh_apply, 'generate_llm_questionnaire_answers',
+                        lambda *args, **kwargs: {'task_1': 'Java'})
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(
+        _make_acc(), '777', preview_only=True))
+    assert result == 'preview'
+    assert info['answers'] == {'task_1': '101'}
+    reviewed, reviewed_info = _run_coro(hh_apply.fill_and_submit_questionnaire(
+        _make_acc(), '777', preview_only=True,
+        approved_answers=info['answers'], expected_questions=info['questions']))
+    assert reviewed == 'preview' and reviewed_info['answers'] == info['answers']
+
+
+def test_questionnaire_does_not_fallback_to_templates_when_llm_is_empty(hh_no_proxy, monkeypatch):
+    rec = _install_recorder(monkeypatch, get_resp=_RecResp(
+        200, '<div data-qa="task-question">Опыт?</div><textarea name="task_1_text"></textarea>'))
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_enabled', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_fill_questionnaire', True)
+    monkeypatch.setattr(hh_apply.CONFIG, 'llm_use_resume', False)
+    monkeypatch.setattr(hh_apply, 'generate_llm_questionnaire_answers', lambda *args, **kwargs: {})
+    result, info = _run_coro(hh_apply.fill_and_submit_questionnaire(_make_acc(), '777'))
+    assert (result, info) == ('error', {'error_code': 'llm_no_answer'})
+    assert [call[0] for call in rec.calls] == ['GET']
 
 
 @pytest.mark.parametrize('status,body,location', [

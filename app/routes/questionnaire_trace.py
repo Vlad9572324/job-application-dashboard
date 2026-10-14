@@ -51,8 +51,11 @@ def _run_summary(run_id: str, events: list[dict]) -> dict:
     error = next((e for e in reversed(events) if e.get("stage") == "error"), None)
     blocked = next((e for e in reversed(events) if e.get("stage") in ("answer_review_blocked", "answer_gender_blocked")), None)
     submitted = any(e.get("stage") == "submission_started" for e in events)
+    no_fields = any(e.get("stage") == "form_unrecognized" for e in events)
     form = next((e for e in events if e.get("stage") == "form_parsed"), None)
     result_details = (result or {}).get("details") or {}
+    review = next((e for e in reversed(events) if e.get("stage") == "post_run_review"), None)
+    review_details = (review or {}).get("details") or {}
     status = result_details.get("status") or ("error" if error else "unknown" if submitted else "in_progress")
     return {"run_id": run_id, "at": start.get("at", ""),
             "account": start.get("account", ""), "vacancy_id": start.get("vacancy_id", ""),
@@ -60,6 +63,8 @@ def _run_summary(run_id: str, events: list[dict]) -> dict:
             "origin": start_details.get("origin", "targeted"), "status": status,
             "submitted": submitted, "question_count": len(((form or {}).get("details") or {}).get("questions") or []),
             "error_code": (result_details.get("info") or {}).get("error_code", ""),
+            "diagnosis": review_details.get("diagnosis", ""),
+            "no_fields": no_fields,
             "blocked": bool(blocked)}
 
 
@@ -70,7 +75,20 @@ async def questionnaire_history(limit: int = 100, offset: int = 0):
     items = [_run_summary(run_id, events) for run_id, events in runs.items() if events]
     items.sort(key=lambda item: item["at"], reverse=True)
     start = max(0, offset)
+    outcomes = {
+        "confirmed": sum(item["status"] == "sent" for item in items),
+        "already": sum(item["status"] == "already" for item in items),
+        "no_fields": sum(item["no_fields"] for item in items),
+        "returned_to_form": sum(item["status"] == "test" and item["submitted"] for item in items),
+        "visibility_blocked": sum(item["error_code"] == "resume_visibility_restricted"
+                                  or item["diagnosis"] == "resume_visibility_restricted"
+                                  for item in items),
+        "unconfirmed": sum(item["status"] == "unknown" for item in items),
+    }
+    no_field_vacancies = {item["vacancy_id"] for item in items if item["no_fields"]}
+    outcomes["no_field_vacancies"] = len(no_field_vacancies)
     return {"ok": True, "total": len(items), "stats": get_test_vacancy_stats(),
+            "outcomes": outcomes,
             "items": items[start:start + min(max(1, limit), 200)]}
 
 
@@ -94,9 +112,9 @@ async def questionnaire_history_detail(run_id: str):
                       "source": sources.get(q.get("field"), "")}
                      for q in questions if isinstance(q, dict)]
     # Explicit allowlist prevents future trace fields from exposing credentials.
-    allowed = {"started", "web_session_ready", "form_parsed", "form_fetch_failed",
-               "form_unrecognized", "resume_context", "llm_context", "llm_request", "llm_response",
-               "llm_answers_validated", "llm_no_answer", "llm_quota_exceeded",
+    allowed = {"started", "web_session_ready", "form_parsed", "form_fetch_failed", "already_responded",
+               "form_unrecognized", "resume_visibility_blocked", "resume_context", "llm_context", "llm_request", "llm_response",
+               "llm_answers_validated", "llm_answers_rejected", "llm_no_answer", "llm_quota_exceeded",
                "llm_empty_response", "llm_invalid_json", "answers_ready",
                "answer_review_blocked", "answer_gender_blocked", "submission_started", "submission_response",
                "preview_ready", "reviewed_answers_reused", "reviewed_form_changed",
@@ -178,6 +196,9 @@ async def probe_questionnaire(idx: int, vid: str):
             return {"ok": False, "status": "auth", "http_status": status}
         if status != 200:
             return {"ok": False, "status": "form_unavailable", "http_status": status}
+        if re.search(r'data-qa\s*=\s*["\']already-responded-text["\']', html):
+            return {"ok": False, "status": "already_responded", "vacancy_id": vid,
+                    "question_count": 0, "question_types": []}
         questions = _parse_questionnaire_rich(html)
         return {"ok": bool(questions), "status": "ready" if questions else "no_questions",
                 "vacancy_id": vid, "question_count": len(questions),

@@ -4,7 +4,9 @@
 'да/нет' могло отдать "да" вместо реальной метки.
 """
 from app.config import CONFIG
-from app.questionnaire import _parse_questionnaire_rich, get_questionnaire_answer, questionnaire_preset_previews
+from app.questionnaire import (_parse_questionnaire_fields, _parse_questionnaire_rich,
+                               get_questionnaire_answer, questionnaire_preset_previews,
+                               resolve_questionnaire_option)
 
 
 def test_saved_preset_answer_follows_applicant_gender(monkeypatch):
@@ -120,3 +122,39 @@ def test_select_extracted():
 def test_empty_html_returns_empty_list():
     assert _parse_questionnaire_rich("") == []
     assert _parse_questionnaire_rich("<div>nothing here</div>") == []
+
+
+def test_nested_labels_and_mixed_question_order():
+    """HH wraps radio inputs in labels and can put choice questions before text."""
+    html = '''
+    <div data-qa="task-question">Какой язык используете?</div>
+    <label><input type="radio" name="task_1" value="17">Python</label>
+    <label><input type="radio" name="task_1" value="18">Kotlin</label>
+    <div data-qa="task-question">Расскажите об опыте</div>
+    <textarea name="task_2_text"></textarea>
+    <div data-qa="task-question">Какие инструменты знаете?</div>
+    <label><input type="checkbox" name="task_3" value="91">Docker</label>
+    <label><input type="checkbox" name="task_3" value="92">Kubernetes</label>
+    '''
+    parsed = _parse_questionnaire_rich(html)
+    assert [(q["field"], q["text"]) for q in parsed] == [
+        ("task_1", "Какой язык используете?"),
+        ("task_2_text", "Расскажите об опыте"),
+        ("task_3", "Какие инструменты знаете?"),
+    ]
+    assert parsed[0]["options"] == [
+        {"value": "17", "label": "Python"}, {"value": "18", "label": "Kotlin"}]
+    assert parsed[2]["options"][0] == {"value": "91", "label": "Docker"}
+    questions, answers = _parse_questionnaire_fields(html)
+    assert questions == [q["text"] for q in parsed]
+    assert set(answers) == {"task_1", "task_2_text", "task_3"}
+
+
+def test_llm_choice_can_use_unique_visible_label():
+    options = [{"value": "101", "label": "Да"}, {"value": "102", "label": "Нет"}]
+    assert resolve_questionnaire_option("нет", options) == "102"
+    assert resolve_questionnaire_option("Да.", options) == "101"
+    assert resolve_questionnaire_option(["Да", "Нет"], options, multiple=True) == ["101", "102"]
+    assert resolve_questionnaire_option("Возможно", options) is None
+    ambiguous = [{"value": "1", "label": "Да"}, {"value": "2", "label": "Да"}]
+    assert resolve_questionnaire_option("Да", ambiguous) is None

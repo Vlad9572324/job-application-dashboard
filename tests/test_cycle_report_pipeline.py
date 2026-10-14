@@ -82,7 +82,7 @@ def pipeline(monkeypatch):
         monkeypatch.setattr(module, name, Mock(side_effect=AssertionError("Unexpected external operation")))
     monkeypatch.setattr(module, "HH", SimpleNamespace(
         get=Mock(side_effect=AssertionError("Unexpected external operation"))))
-    monkeypatch.setattr(module, "time", SimpleNamespace(sleep=Mock()))
+    monkeypatch.setattr(module, "time", SimpleNamespace(sleep=Mock(), time=Mock(return_value=0)))
     for key, value in {
         "auto_apply_tests": False, "title_include_keywords": [], "title_exclude_keywords": [],
         "skip_auto_response_vacancies": False, "accredited_it_only": False,

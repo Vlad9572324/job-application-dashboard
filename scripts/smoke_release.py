@@ -17,8 +17,10 @@ def main():
     args = parser.parse_args()
     bundle = args.bundle.resolve()
     executable = bundle / ("hh-clicker.exe" if os.name == "nt" else "hh-clicker")
-    if not executable.is_file() or not (bundle / "static" / "index.html").is_file():
-        parser.error("binary or static assets missing from bundle")
+    if (not executable.is_file() or not (bundle / "static" / "index.html").is_file()
+            or not (bundle / "models" / "captcha" / "model.pt").is_file()
+            or not (bundle / "models" / "captcha" / "charset.txt").is_file()):
+        parser.error("binary, static assets, or default CAPTCHA model missing from bundle")
 
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

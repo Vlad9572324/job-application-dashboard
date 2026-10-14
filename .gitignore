@@ -8,10 +8,12 @@ images/[0-9][0-9]-*.png
 .env.*
 !.env.example
 
-# Локальные файлы моделей: README оставляем в репозитории.
+# Основная модель капчи входит в релиз; загруженные пользователем версии локальны.
 /models/**
 !/models/captcha/
 !/models/captcha/README.md
+!/models/captcha/model.pt
+!/models/captcha/charset.txt
 
 # Экспорты аккаунтов / авторизации (в любом подкаталоге)
 **/accounts.json

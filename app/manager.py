@@ -3202,7 +3202,13 @@ class BotManager:
                     already_count += 1
                     state.already_applied += 1
                     cycle_outcome(state, vid, "already")
-                elif (is_test(vid) or state._test_failures.get(vid, 0) >= 2) and not apply_tests:
+                elif state._visibility_blocked_until.get(vid, 0) > time.time():
+                    cycle_outcome(state, vid, "skipped", "resume_visibility_restricted")
+                elif state._test_failures.get(vid, 0) >= 2:
+                    test_count += 1
+                    state.tests += 1
+                    cycle_outcome(state, vid, "skipped", "questionnaire_rejected_twice")
+                elif is_test(vid) and not apply_tests:
                     test_count += 1
                     state.tests += 1
                     cycle_outcome(state, vid, "skipped", "questionnaire_disabled")
@@ -3377,8 +3383,6 @@ class BotManager:
                 # Daily limit check
                 if self._maybe_roll_daily_counter(state):
                     # Cleanup unbounded dicts on new day
-                    if len(state._test_failures) > 500:
-                        state._test_failures.clear()
                     if len(state._msg_consecutive) > 500:
                         state._msg_consecutive.clear()
                 if CONFIG.daily_apply_limit > 0 and state.daily_sent >= CONFIG.daily_apply_limit:
@@ -3760,6 +3764,8 @@ class BotManager:
                                 vid, vacancy_title=title, company=company))
                             if q_result in ("sent", "already"):
                                 cycle_outcome(state, vid, q_result)
+                            elif q_result == "error" and (q_info or {}).get("error_code") == "resume_visibility_restricted":
+                                cycle_outcome(state, vid, "skipped", "resume_visibility_restricted")
                             elif q_result in ("error", "auth_error", "rate_limit", "challenge"):
                                 cycle_outcome(state, vid, "error")
                             elif q_result == "unknown":
@@ -3827,6 +3833,12 @@ class BotManager:
                                 break
                             elif q_result == 'cancelled':
                                 continue
+                            elif q_result == 'error' and (q_info or {}).get('error_code') == 'resume_visibility_restricted':
+                                state._visibility_blocked_until[vid] = time.time() + 3600
+                                state.tests += 1
+                                self._add_response(state, vid, title, company, "test")
+                                self._add_log(state.short, state.color,
+                                    f"HH требует изменить видимость резюме для отклика: {display_title}", "warning")
                             elif q_result == 'error':
                                 # The client uses 'error' only for a known failure
                                 # before submitting; no unknown write to reconcile.
@@ -3858,20 +3870,26 @@ class BotManager:
                                 # Hold ambiguous submissions for manual review;
                                 # never blindly resend a potentially accepted form.
                                 add_test_vacancy(vid, title, company, acc['name'], acc.get('resume_hash', ''))
-                            else:
-                                # Не удалось — считаем неудачи
+                            elif q_result == "test":
+                                # HH вернул на форму; после двух отказов не отправляем повторно.
                                 state._test_failures[vid] = state._test_failures.get(vid, 0) + 1
                                 if state._test_failures[vid] >= 2:
-                                    # Permanently mark as failed test after 2 attempts
                                     add_test_vacancy(vid, title, company,
                                                      acc["name"], acc.get("resume_hash", ""))
                                 state.tests += 1
                                 self._push_action(state, f"\U0001f9ea {display_title[:25]}")
                                 self._add_response(state, vid, title, company, "test")
+                                rejected = (q_info or {}).get("error_code") == "questionnaire_rejected"
                                 self._add_log(state.short, state.color,
-                                              f"\U0001f9ea Тест (не пройден, попытка {state._test_failures[vid]}): {display_title}", "warning")
+                                              f"\U0001f9ea Анкета не принята HH (попытка {state._test_failures[vid]}): {display_title}"
+                                              if rejected else
+                                              f"\U0001f9ea Анкета не завершена (попытка {state._test_failures[vid]}): {display_title}", "warning")
                                 self._add_acc_event(state, "\U0001f9ea", "test",
-                                                    title or vid, company, "не пройден")
+                                                    title or vid, company,
+                                                    "не принята HH" if rejected else "не завершена")
+                            else:
+                                self._add_log(state.short, state.color,
+                                              f"Анкета не отправлена ({q_result}): {display_title}", "warning")
 
                     elif result == "already":
                         state.already_applied += 1

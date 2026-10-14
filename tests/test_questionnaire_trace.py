@@ -155,6 +155,7 @@ def test_questionnaire_api_receives_saved_prompt_and_resume(monkeypatch):
     system = captured["messages"][0]["content"]
     assert "Мой стиль: коротко и по делу." in system
     assert "Общий опыт: 3 л. 0 мес." in system
+    assert "В целом у меня есть опыт" in system
     assert "Пиши от первого лица в женском роде" in system
     assert any(stage == "llm_context" and details["resume_included"] for stage, details in events)
 
@@ -206,6 +207,34 @@ def test_ordinary_questionnaire_records_result(monkeypatch, tmp_path):
     item = listing["items"][0]
     assert item["title"] == "QA" and item["company"] == "Company"
     assert item["status"] == "sent" and item["submitted"] is True
+
+
+def test_history_counts_repeated_no_field_runs_by_vacancy(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "TRACE_FILE", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(mod, "get_test_vacancy_stats", lambda: {"found": 1, "applied": 0})
+    for run_id in ("a" * 32, "b" * 32):
+        mod._record(run_id, "Tester", "12345678", "started", {"origin": "automatic"})
+        mod._record(run_id, "Tester", "12345678", "form_unrecognized", {})
+        mod._record(run_id, "Tester", "12345678", "result", {"status": "test", "info": {}})
+    listing = asyncio.run(mod.questionnaire_history())
+    assert listing["outcomes"]["no_fields"] == 2
+    assert listing["outcomes"]["no_field_vacancies"] == 1
+    assert all(item["no_fields"] and not item["submitted"] for item in listing["items"])
+
+
+def test_history_shows_post_run_visibility_diagnosis(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "TRACE_FILE", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(mod, "get_test_vacancy_stats", lambda: {"found": 1, "applied": 0})
+    run_id = "c" * 32
+    mod._record(run_id, "Tester", "12345678", "started", {})
+    mod._record(run_id, "Tester", "12345678", "submission_started", {})
+    mod._record(run_id, "Tester", "12345678", "result",
+                {"status": "test", "info": {"error_code": "questionnaire_rejected"}})
+    mod._record(run_id, "Tester", "12345678", "post_run_review",
+                {"diagnosis": "resume_visibility_restricted", "source": "current_hh_form"})
+    item = asyncio.run(mod.questionnaire_history())["items"][0]
+    assert item["diagnosis"] == "resume_visibility_restricted"
+    assert item["error_code"] == "questionnaire_rejected"
 
 
 def test_test_vacancy_stats_count_unique_vacancies(monkeypatch):

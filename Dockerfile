@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY web_app.py .
 COPY app/ app/
 COPY static/ static/
+COPY models/captcha/model.pt models/captcha/charset.txt models/captcha/
 
 # Папка data монтируется через volume (см. docker-compose.yml)
 RUN mkdir -p data

@@ -22,7 +22,8 @@ from app.hh_http import _aio_proxy, _aio_session_connector, _aio_egress_kwargs  
 from app.user_agent import webview_user_agent
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume, _token_key
-from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
+from app.questionnaire import (_parse_questionnaire_fields, _parse_questionnaire_rich,
+                               resolve_questionnaire_option)
 from app.questionnaire_claims import unsupported_questionnaire_claims
 from app.gender_guard import conflicting_gender_words
 from app.llm import _randomize_text, generate_llm_questionnaire_answers, get_llm_last_status
@@ -426,6 +427,16 @@ async def _fill_and_submit_questionnaire_impl(acc: dict, vid: str,
                 emit("form_fetch_failed", http_status=status_code)
                 return "error", {"http_status": status_code}
 
+            # HH keeps the same vacancy_response URL for a vacancy that was
+            # already answered, but replaces the questions with this marker.
+            # Do not report it as an unrecognized test and retry indefinitely.
+            if re.search(r'data-qa\s*=\s*["\']already-responded-text["\']', html):
+                emit("already_responded")
+                return "already", {"reason": "hh_already_responded"}
+            if re.search(r'data-qa\s*=\s*["\']hidden-resume-warning["\']', html):
+                emit("resume_visibility_blocked")
+                return "error", {"error_code": "resume_visibility_restricted"}
+
             # Hidden поля
             hidden = dict(re.findall(r'<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"', html))
             hidden.update(dict(re.findall(r'<input[^>]+name="([^"]+)"[^>]+type="hidden"[^>]+value="([^"]*)"', html)))
@@ -475,7 +486,21 @@ async def _fill_and_submit_questionnaire_impl(acc: dict, vid: str,
                 # generate_llm_questionnaire_answers тоже sync (OpenAI client).
                 import asyncio as _aio2
                 if approved_answers is not None:
-                    if not isinstance(approved_answers, dict) or set(approved_answers) != set(field_answers):
+                    if not isinstance(approved_answers, dict) or not set(approved_answers) <= set(field_answers):
+                        return "error", {"error_code": "reviewed_fields_changed"}
+                    optional_custom = set()
+                    by_field = {q["field"]: q for q in rich_qs}
+                    for q in rich_qs:
+                        field = q["field"]
+                        if q["type"] != "textarea" or not field.endswith("_text"):
+                            continue
+                        choice = by_field.get(field[:-5])
+                        if not choice or not any(o["value"] == "open" for o in choice["options"]):
+                            continue
+                        selected = approved_answers.get(field[:-5])
+                        if selected != "open" and not (isinstance(selected, list) and "open" in selected):
+                            optional_custom.add(field)
+                    if set(field_answers) - set(approved_answers) - optional_custom:
                         return "error", {"error_code": "reviewed_fields_changed"}
                     llm_ans = approved_answers
                     emit("reviewed_answers_reused", fields=list(approved_answers))
@@ -503,42 +528,49 @@ async def _fill_and_submit_questionnaire_impl(acc: dict, vid: str,
                             if isinstance(llm_val, (str, int, float, bool)):
                                 validated_ans[field] = str(llm_val)
                             continue
-                        valid_values = [o["value"] for o in q["options"]]
-                        # Checkbox may legitimately receive a list of selected values
-                        if q["type"] == "checkbox" and isinstance(llm_val, list):
-                            picked = []
-                            for item in llm_val:
-                                if not isinstance(item, (str, int, float, bool)):
-                                    continue
-                                s = str(item).strip()
-                                if s in valid_values:
-                                    picked.append(s)
-                                else:
-                                    fuzzy = [v for v in valid_values if v.lower().strip() == s.lower()]
-                                    if fuzzy:
-                                        picked.append(fuzzy[0])
-                            if picked:
-                                validated_ans[field] = picked
-                            else:
-                                log_debug(f"LLM checkbox {field}: nothing matched in {llm_val} vs {valid_values}")
-                            continue
-                        # Scalar option (radio/select or single checkbox value as string)
-                        if not isinstance(llm_val, (str, int, float, bool)):
-                            log_debug(f"LLM {q['type']} {field}: unexpected type {type(llm_val).__name__}, skipping")
-                            continue
-                        s = str(llm_val).strip()
-                        if s in valid_values:
-                            validated_ans[field] = s
+                        selected = resolve_questionnaire_option(
+                            llm_val, q["options"], multiple=q["type"] == "checkbox")
+                        if selected is None and q["type"] == "checkbox":
+                            # HH's "Свой вариант" uses task_N=open plus task_N_text.
+                            custom_text = llm_ans.get(field + "_text")
+                            if custom_text and any(o["value"] == "open" for o in q["options"]):
+                                selected = "open"
+                        if selected is not None:
+                            validated_ans[field] = selected
                         else:
-                            fuzzy = [v for v in valid_values if v.lower().strip() == s.lower()]
-                            if fuzzy:
-                                validated_ans[field] = fuzzy[0]
-                            else:
-                                log_debug(f"LLM answer '{s}' not in options {valid_values}, skipping field {field}")
+                            log_debug(f"LLM choice for {field}: no unique matching option")
+                    missing_choices = [q["field"] for q in rich_qs
+                                       if q["type"] in ("radio", "checkbox", "select")
+                                       and q["options"] and q["field"] not in validated_ans]
+                    if missing_choices:
+                        emit("llm_answers_rejected", fields=missing_choices, reason="choice_unresolved")
+                        return "error", {"error_code": "llm_answers_rejected"}
+                    def custom_option_selected(field):
+                        selected = validated_ans.get(field)
+                        return selected == "open" or (isinstance(selected, list) and "open" in selected)
+                    missing_text = [q["field"] for q in rich_qs
+                                    if q["type"] == "textarea" and q["field"] not in validated_ans
+                                    and not (q["field"].endswith("_text")
+                                             and q["field"][:-5] in rich_fields
+                                             and not custom_option_selected(q["field"][:-5]))]
+                    if missing_text:
+                        emit("llm_answers_rejected", fields=missing_text, reason="text_missing")
+                        return "error", {"error_code": "llm_answers_rejected"}
                     overridden = [f for f in validated_ans if f in field_answers]
                     for f in overridden:
                         field_answers[f] = validated_ans[f]
                         answer_sources[f] = "llm"
+                    for q in rich_qs:
+                        field = q["field"]
+                        if q["type"] != "textarea" or not field.endswith("_text"):
+                            continue
+                        choice = rich_fields.get(field[:-5])
+                        if not choice or not any(o["value"] == "open" for o in choice["options"]):
+                            continue
+                        selected = field_answers.get(field[:-5])
+                        if selected != "open" and not (isinstance(selected, list) and "open" in selected):
+                            field_answers.pop(field, None)
+                            answer_sources.pop(field, None)
                     log_debug(f"Questionnaire {vid}: LLM заполнил {len(overridden)}/{len(field_answers)} полей: {overridden}")
                     emit("llm_answers_validated", proposed=llm_ans, accepted=validated_ans,
                          overridden_fields=overridden)
@@ -550,16 +582,12 @@ async def _fill_and_submit_questionnaire_impl(acc: dict, vid: str,
                     llm_status = get_llm_last_status(f"questionnaire:{acc.get('resume_hash') or acc.get('short') or vid}", "questionnaire")
                     provider = llm_status.get("provider") or "unknown"
                     status = llm_status.get("status") or "empty"
-                    if provider == "openclaw" and status == "timeout":
-                        log_debug(f"Questionnaire {vid}: OpenClaw timeout, используем шаблоны")
-                    else:
-                        log_debug(
-                            f"Questionnaire {vid}: LLM не дал валидный ответ "
-                            f"(provider={provider}, status={status}), используем шаблоны"
-                        )
+                    log_debug(
+                        f"Questionnaire {vid}: LLM не дал валидный ответ "
+                        f"(provider={provider}, status={status}); отправка остановлена"
+                    )
                     emit("llm_no_answer", provider=provider, status=status)
-                    if require_llm:
-                        return "error", {"error_code": "llm_no_answer"}
+                    return "error", {"error_code": "llm_no_answer"}
             elif require_llm:
                 emit("llm_disabled")
                 return "error", {"error_code": "llm_disabled"}
@@ -651,7 +679,7 @@ async def _fill_and_submit_questionnaire_impl(acc: dict, vid: str,
                 # Редирект назад на форму — ошибка валидации
                 if "withoutTest=no" in location or f"vacancyId={vid}" in location:
                     log_debug(f"Questionnaire {vid}: form rejected, redirect back")
-                    return "test", {}
+                    return "test", {"error_code": "questionnaire_rejected", "http_status": status}
                 return await unconfirmed()
 
             if status == 200:

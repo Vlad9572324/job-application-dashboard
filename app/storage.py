@@ -74,6 +74,7 @@ except Exception:
 
 APPLIED_FILE = DATA_DIR / "applied_vacancies.json"
 TESTS_FILE = DATA_DIR / "test_required_vacancies.json"
+QUESTIONNAIRE_TRACE_FILE = DATA_DIR / "questionnaire_trace.jsonl"
 INTERVIEWS_FILE = DATA_DIR / "interviews.json"
 SESSIONS_FILE = DATA_DIR / "browser_sessions.json"
 
@@ -635,6 +636,31 @@ def is_test(vacancy_id: str) -> bool:
     _load_cache()
     with _cache_lock:
         return vacancy_id in _cache_tests
+
+
+def get_questionnaire_rejection_counts(account_name: str) -> dict[str, int]:
+    """Restore confirmed redirects to the form, so restarting cannot retry them forever."""
+    counts: dict[str, int] = {}
+    if not QUESTIONNAIRE_TRACE_FILE.exists():
+        return counts
+    try:
+        with QUESTIONNAIRE_TRACE_FILE.open(encoding="utf-8") as source:
+            for line in source:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if (not isinstance(event, dict) or event.get("account") != account_name
+                        or event.get("stage") != "submission_response"):
+                    continue
+                details = event.get("details") or {}
+                if isinstance(details, dict) and details.get("redirect_to_form") is True:
+                    vid = str(event.get("vacancy_id") or "")
+                    if vid.isdigit():
+                        counts[vid] = counts.get(vid, 0) + 1
+    except OSError as exc:
+        log_debug(f"Questionnaire rejection history unavailable: {type(exc).__name__}")
+    return counts
 
 
 def get_test_vacancy_stats() -> dict:

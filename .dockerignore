@@ -7,10 +7,12 @@ backups/
 .env.*
 !.env.example
 
-# Веса и алфавит поступают через bind mount, не через Docker image.
+# Основная модель капчи входит в образ; загруженные версии остаются локальными.
 /models/**
 !/models/captcha/
 !/models/captcha/README.md
+!/models/captcha/model.pt
+!/models/captcha/charset.txt
 
 # Local reverse-engineering and diagnostic artefacts.
 probe_*.py

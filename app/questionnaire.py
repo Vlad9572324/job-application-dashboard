@@ -3,6 +3,7 @@ Questionnaire parsing and template-based answer generation.
 """
 
 import re
+import unicodedata
 
 from bs4 import BeautifulSoup
 
@@ -93,96 +94,28 @@ def _parse_questionnaire_fields(html: str) -> tuple:
       field_answers: dict {field_name: answer_value} — готовые значения для POST
     Поддерживает textarea, radio, checkbox.
     """
-    # Тексты вопросов
-    q_blocks = re.findall(
-        r'data-qa="task-question">(.*?)(?=data-qa="task-question"|</(?:div|section|form)>)',
-        html, re.DOTALL
-    )
-    questions = []
-    for block in q_blocks:
-        clean = re.sub(r'<[^>]+>', ' ', block)
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        questions.append(clean)
-
-    field_answers = {}
-
-    # ── Textarea (task_*_text) ──────────────────────────────────
-    for i, name in enumerate(re.findall(r'<textarea[^>]+name="(task_\d+_text)"', html)):
-        q_text = questions[i] if i < len(questions) else ""
-        field_answers[name] = get_questionnaire_answer(q_text)
-
-    # ── Radio (task_*) ──────────────────────────────────────────
-    # Собираем группы: {name: [(value, label), ...]}
-    radio_groups: dict = {}
-    for inp in re.findall(r'<input[^>]+type="radio"[^>]+>', html, re.IGNORECASE):
-        name_m = re.search(r'name="([^"]+)"', inp)
-        val_m  = re.search(r'value="([^"]+)"', inp)
-        if name_m and val_m and re.match(r'task_\d+', name_m.group(1)):
-            radio_groups.setdefault(name_m.group(1), []).append(val_m.group(1))
-
-    # Для каждой radio-группы выбираем значение
-    # Порядок radio-групп ≈ порядку вопросов после textarea
-    textarea_count = len([k for k in field_answers])
-    for i, (name, values) in enumerate(radio_groups.items()):
-        if name in field_answers:
+    rich = _parse_questionnaire_rich(html)
+    answers = {}
+    negative = ("нет", "no", "не готов", "не готова", "не могу")
+    for question in rich:
+        field, kind = question["field"], question["type"]
+        template = get_questionnaire_answer(question["text"])
+        if kind == "textarea":
+            answers[field] = template
             continue
-        q_idx = textarea_count + i
-        q_text = questions[q_idx] if q_idx < len(questions) else ""
-        tmpl_answer = get_questionnaire_answer(q_text).lower()
-
-        if not values:
+        options = [o for o in question["options"] if o["value"] != ""]
+        if not options:
             continue
-        chosen = values[0]  # дефолт — первый вариант
-
-        # Ищем label-текст для каждого value чтобы сопоставить с шаблоном
-        # Порядок: первый input = "да", второй = "нет" (типичная раскладка HH)
-        # Если шаблон содержит "нет"/"no" — берём второй
-        if any(w in tmpl_answer for w in ("нет", "no", "не готов", "не готова", "не могу")):
-            chosen = values[1] if len(values) > 1 else values[0]
-
-        field_answers[name] = chosen
-
-    # ── Checkbox (task_*) ───────────────────────────────────────
-    checkbox_groups: dict = {}
-    for inp in re.findall(r'<input[^>]+type="checkbox"[^>]+>', html, re.IGNORECASE):
-        name_m = re.search(r'name="([^"]+)"', inp)
-        val_m  = re.search(r'value="([^"]+)"', inp)
-        if name_m and val_m and re.match(r'task_\d+', name_m.group(1)):
-            checkbox_groups.setdefault(name_m.group(1), []).append(val_m.group(1))
-
-    cb_idx = len(field_answers)
-    for name, values in checkbox_groups.items():
-        if name in field_answers:
-            continue
-        q_idx = cb_idx
-        cb_idx += 1
-        q_text = questions[q_idx] if q_idx < len(questions) else ""
-        answer = get_questionnaire_answer(q_text).lower()
-        # Pick values that match keywords in the answer
-        selected = [v for v in values if any(kw in v.lower() for kw in answer.split() if len(kw) > 2)]
-        if not selected:
-            selected = [values[0]]  # fallback to first
-        field_answers[name] = selected[0]
-
-    # ── Select (dropdown) fields ───────────────────────────────
-    select_idx = cb_idx
-    for m in re.finditer(r'<select[^>]+name="(task_\d+)"[^>]*>([\s\S]*?)</select>', html):
-        sel_name = m.group(1)
-        options_html = m.group(2)
-        options = re.findall(r'<option[^>]+value="([^"]*)"[^>]*>([^<]*)</option>', options_html)
-        if options and sel_name not in field_answers:
-            q_text = questions[select_idx] if select_idx < len(questions) else ""
-            select_idx += 1
-            answer = get_questionnaire_answer(q_text).lower()
-            # Pick best matching option
-            best = options[0][0]  # default first
-            for val, label in options:
-                if any(kw in label.lower() for kw in answer.split() if len(kw) > 2):
-                    best = val
-                    break
-            field_answers[sel_name] = best
-
-    return questions, field_answers
+        chosen = options[0]
+        if kind == "radio" and any(word in template.lower() for word in negative):
+            chosen = next((o for o in options if any(word in o["label"].lower() for word in negative)),
+                          options[min(1, len(options) - 1)])
+        elif kind in ("checkbox", "select"):
+            words = [word for word in template.lower().split() if len(word) > 2]
+            chosen = next((o for o in options if any(word in o["label"].lower() for word in words)),
+                          options[0])
+        answers[field] = chosen["value"]
+    return [q["text"] for q in rich], answers
 
 
 def _parse_questionnaire_rich(html: str) -> list:
@@ -191,83 +124,61 @@ def _parse_questionnaire_rich(html: str) -> list:
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    q_blocks = soup.find_all(attrs={"data-qa": "task-question"})
-    q_texts = []
-    for b in q_blocks:
-        c = b.get_text(separator=' ', strip=True)
-        q_texts.append(c)
-
     result = []
-    q_idx = 0
-
-    for textarea in soup.find_all("textarea", attrs={"name": re.compile(r"task_\d+_text")}):
-        name = textarea.get("name")
-        result.append({"field": name, "type": "textarea",
-                       "text": q_texts[q_idx] if q_idx < len(q_texts) else "", "options": []})
-        q_idx += 1
-
-    radio_groups: dict = {}      # name -> [value, ...]
-    radio_value_label: dict = {}  # (name, value) -> label_text
-    radio_order: list = []
-    for inp in soup.find_all("input", attrs={"type": "radio", "name": re.compile(r"task_\d+")}):
-        n = inp.get("name")
-        v = inp.get("value")
-        if not (n and v):
+    by_field = {}
+    q_texts = [node.get_text(separator=" ", strip=True)
+               for node in soup.find_all(attrs={"data-qa": "task-question"})]
+    for control in soup.find_all(("textarea", "input", "select")):
+        name = control.get("name") or ""
+        if not re.fullmatch(r"task_\d+(?:_text)?", name):
             continue
-        if n not in radio_groups:
-            radio_groups[n] = []
-            radio_order.append(n)
-        radio_groups[n].append(v)
-        inp_id = inp.get("id")
-        if inp_id:
-            label = soup.find("label", attrs={"for": inp_id})
-            if label:
-                lbl_text = label.get_text(strip=True)
-                if lbl_text:
-                    radio_value_label[(n, v)] = lbl_text
-
-    default_labels = ["да", "нет"]
-    for name in radio_order:
-        vals = radio_groups[name]
-        options = [
-            {"value": v,
-             "label": radio_value_label.get((name, v), default_labels[i] if i < len(default_labels) else v)}
-            for i, v in enumerate(vals)
-        ]
-        result.append({"field": name, "type": "radio",
-                       "text": q_texts[q_idx] if q_idx < len(q_texts) else "", "options": options})
-        q_idx += 1
-
-    checkbox_groups: dict = {}
-    checkbox_order: list = []
-    for inp in soup.find_all("input", attrs={"type": "checkbox", "name": re.compile(r"task_\d+")}):
-        n = inp.get("name")
-        v = inp.get("value")
-        if not (n and v):
+        kind = (control.get("type") or "text").lower() if control.name == "input" else control.name
+        if kind in ("text", "textarea"):
+            kind = "textarea"
+        if kind not in ("textarea", "radio", "checkbox", "select"):
             continue
-        if n not in checkbox_groups:
-            checkbox_groups[n] = []
-            checkbox_order.append(n)
-        checkbox_groups[n].append(v)
-
-    for name in checkbox_order:
-        vals = checkbox_groups[name]
-        options = [{"value": v, "label": v} for v in vals]
-        result.append({"field": name, "type": "checkbox",
-                       "text": q_texts[q_idx] if q_idx < len(q_texts) else "", "options": options})
-        q_idx += 1
-
-    # Select (dropdown) fields
-    for sel in soup.find_all("select", attrs={"name": re.compile(r"task_\d+")}):
-        sel_name = sel.get("name")
-        options = []
-        for opt in sel.find_all("option"):
-            val = opt.get("value", "")
-            label = opt.get_text(strip=True)
-            options.append({"value": val, "label": label})
-        q_text = q_texts[q_idx] if q_idx < len(q_texts) else ""
-        q_idx += 1
-        result.append({"field": sel_name, "type": "select", "text": q_text,
-                       "options": options})
-
+        if name not in by_field:
+            question_node = control.find_previous(attrs={"data-qa": "task-question"})
+            text = (question_node.get_text(separator=" ", strip=True) if question_node else
+                    q_texts[len(result)] if len(result) < len(q_texts) else "")
+            by_field[name] = {"field": name, "type": kind, "text": text, "options": []}
+            result.append(by_field[name])
+        question = by_field[name]
+        if kind in ("radio", "checkbox"):
+            value = control.get("value")
+            if value is None:
+                continue
+            label = control.find_parent("label")
+            if label is None and control.get("id"):
+                label = soup.find("label", attrs={"for": control["id"]})
+            label_text = label.get_text(separator=" ", strip=True) if label else ""
+            question["options"].append({"value": value, "label": label_text or value})
+        elif kind == "select":
+            question["options"] = [{"value": opt.get("value", ""),
+                                    "label": opt.get_text(separator=" ", strip=True)}
+                                   for opt in control.find_all("option")]
     return result
+
+
+def resolve_questionnaire_option(value, options: list[dict], *, multiple: bool = False):
+    """Match an LLM choice to an HH value or a unique visible option label."""
+    if isinstance(value, list):
+        if not multiple or not value:
+            return None
+        resolved = [resolve_questionnaire_option(item, options) for item in value]
+        if any(item is None for item in resolved):
+            return None
+        return list(dict.fromkeys(resolved))
+    if not isinstance(value, (str, int, float, bool)):
+        return None
+    answer = str(value).strip()
+    if not answer:
+        return None
+    for option in options:
+        if answer == str(option.get("value", "")):
+            return answer
+    normalized = unicodedata.normalize("NFKC", answer).casefold().strip(" \t\n\r.!?:")
+    matches = [str(option["value"]) for option in options
+               if unicodedata.normalize("NFKC", str(option.get("label", ""))).casefold()
+               .strip(" \t\n\r.!?:") == normalized]
+    return matches[0] if len(matches) == 1 else None

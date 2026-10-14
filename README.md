@@ -28,10 +28,11 @@
 ## Быстрый старт
 
 Скачайте [последний релиз](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest)
-для [Linux x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/download/v1.0.2/hh-clicker-linux-x64.tar.gz)
-или [Windows x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/download/v1.0.2/hh-clicker-windows-x64.zip),
+для [Linux x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest/download/hh-clicker-linux-x64.tar.gz)
+или [Windows x64](https://github.com/Vlad9572324/hh.ru-clicker/releases/latest/download/hh-clicker-windows-x64.zip),
 распакуйте и запустите `hh-clicker` или `hh-clicker.exe`. Затем откройте
 <http://127.0.0.1:8000>. Для Docker используйте [готовый образ и инструкцию](docs/RELEASE.md#запуск-docker-образа).
+Основная локальная модель распознавания капчи уже включена в архивы и Docker-образ.
 
 При запуске из исходников `docker compose` требует локальный `.env` с
 `HH_BOT_API_KEY` и публикует порт 8000 в локальную сеть. Перед этим прочитайте
@@ -89,7 +90,7 @@ pytest -q
 
 CI проверяет PR и `main`. Для тега `vX.Y.Z` workflow проверяет приложение,
 собирает бинарники Linux и Windows, публикует Docker-образ в GHCR и создаёт
-GitHub Release. Актуальный выпуск — [v1.0.2](https://github.com/Vlad9572324/hh.ru-clicker/releases/tag/v1.0.2).
+GitHub Release. Список выпусков доступен на [странице релизов](https://github.com/Vlad9572324/hh.ru-clicker/releases).
 Установка, проверка контрольных сумм и порядок публикации описаны в
 [docs/RELEASE.md](docs/RELEASE.md).
 

@@ -5907,15 +5907,22 @@ function renderHH(snap) {
 const QuestionnaireHistoryState = {offset: 0, pageSize: 50, total: 0};
 
 function questionnaireStatusLabel(run) {
+  if (run.blocked) return '🛑 Остановлен проверкой ответа';
+  if (run.error_code === 'resume_visibility_restricted') return '🔒 HH требует открыть видимость резюме';
+  if (run.diagnosis === 'resume_visibility_restricted') return '🔒 HH требует открыть видимость резюме';
+  if (run.status === 'test') {
+    return run.submitted ? '⚠️ HH вернул на анкету' :
+      run.no_fields ? '⚠️ В форме не было вопросов' : '⚠️ Анкета не заполнена';
+  }
   const labels = {
     sent: '✅ Отклик подтверждён', already: '↩ Уже откликались',
     unknown: '⚠️ Результат не подтверждён', error: '❌ Не отправлен',
     auth_error: '🔐 Ошибка входа', challenge: '🧩 Капча',
-    limit: '🚫 Лимит HH', test: '⚠️ Анкета не принята',
+    limit: '🚫 Лимит HH',
     cancelled: '⏸ Отменён', preview: '🔎 Предпросмотр, не отправлен',
     in_progress: '⏳ Нет итоговой записи'
   };
-  return run.blocked ? '🛑 Остановлен проверкой ответа' : (labels[run.status] || `⚠️ ${run.status || 'Неизвестно'}`);
+  return labels[run.status] || `⚠️ ${run.status || 'Неизвестно'}`;
 }
 
 async function loadQuestionnaireHistory(append = false) {
@@ -5933,6 +5940,9 @@ async function loadQuestionnaireHistory(append = false) {
     document.getElementById('questionnaire-history-count').textContent = `(${data.total} трассы)`;
     document.getElementById('questionnaire-tests-found').textContent = Number.isInteger(data.stats?.found) ? data.stats.found.toLocaleString('ru-RU') : '—';
     document.getElementById('questionnaire-tests-applied').textContent = Number.isInteger(data.stats?.applied) ? data.stats.applied.toLocaleString('ru-RU') : '—';
+    const outcomes = data.outcomes || {};
+    const outcomeBox = document.getElementById('questionnaire-history-outcomes');
+    if (outcomeBox) outcomeBox.textContent = `Трассы: подтверждено ${outcomes.confirmed ?? '—'} · HH уже видел отклик ${outcomes.already ?? '—'} · без вопросов ${outcomes.no_fields ?? '—'} (${outcomes.no_field_vacancies ?? '—'} вакансии) · HH вернул на форму ${outcomes.returned_to_form ?? '—'} (видимость резюме: ${outcomes.visibility_blocked ?? '—'}) · результат не подтверждён ${outcomes.unconfirmed ?? '—'}.`;
     if (!append) list.innerHTML = '';
     if (!data.total) list.textContent = 'Пока нет сохранённых трасс анкет.';
     else list.insertAdjacentHTML('beforeend', data.items.map(run => {

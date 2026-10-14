@@ -46,6 +46,7 @@ def test_h1_403_login_page_returns_auth_error(monkeypatch):
 
 def test_h1_429_returns_retry_not_skip(monkeypatch):
     """Rate-limit ≠ permanent skip."""
+    monkeypatch.setattr(hh_apply.time, "sleep", lambda *_: None)
     monkeypatch.setattr(hh_apply, "HH", _hh(_mock_resp(429, "")))
     result = _check_vacancy_before_apply({"cookies": {}}, "123")
     assert result["skip_reason"] == "retry"

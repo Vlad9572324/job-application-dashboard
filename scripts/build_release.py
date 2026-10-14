@@ -1,8 +1,8 @@
 """Build a portable one-folder release on the current OS.
 
 Linux and Windows binaries must be built on their respective GitHub runners.
-Only source files and public static assets are packaged; data and model weights
-are created or supplied by the user beside the executable.
+The default CAPTCHA model is packaged with the binary. User settings and
+additional uploaded models remain outside the release.
 """
 
 import argparse
@@ -38,16 +38,16 @@ def main():
 
     bundle = OUT / "hh-clicker"
     shutil.copytree(ROOT / "static", bundle / "static", dirs_exist_ok=True)
-    (bundle / "models" / "captcha").mkdir(parents=True, exist_ok=True)
-    (bundle / "models" / "captcha" / "README.txt").write_text(
-        "Optional local CAPTCHA model: place model.pt and charset.txt here.\n",
-        encoding="utf-8")
+    model_dir = bundle / "models" / "captcha"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("model.pt", "charset.txt"):
+        shutil.copy2(ROOT / "models" / "captcha" / name, model_dir / name)
     (bundle / "README.txt").write_text(
         "Run hh-clicker.exe on Windows or ./hh-clicker on Linux.\n"
         "Open http://127.0.0.1:8000 in your browser.\n"
         "Your settings and accounts are stored in data/ beside the executable.\n"
         "Set HH_BOT_API_KEY in the environment before allowing network access.\n"
-        "Local CAPTCHA weights, if used, go in models/captcha/.\n",
+        "The default local CAPTCHA model is included in models/captcha/.\n",
         encoding="utf-8")
 
     if args.platform == "linux-x64":

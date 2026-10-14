@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from collections import deque
 
 from app.config import CONFIG
-from app.storage import count_applied_on_day
+from app.storage import count_applied_on_day, get_questionnaire_rejection_counts
 from app.account_activity import initial_activity
 
 
@@ -222,7 +222,8 @@ class AccountState:
         # Polling and WebSocket events may ask to scan chats at the same time.
         self._telegram_notify_lock = threading.Lock()
         self._msg_consecutive: dict = {}     # {neg_id: count} consecutive applicant messages without HR reply
-        self._test_failures: dict = {}       # {vid: fail_count} questionnaire fill failures
+        self._test_failures: dict = get_questionnaire_rejection_counts(self.name)
+        self._visibility_blocked_until: dict[str, float] = {}
 
         # Защита deques от race с broadcast loop (list(deque) при concurrent appendleft → RuntimeError).
         # Используется в _add_log/_add_response/_add_acc_event + snapshot reader.

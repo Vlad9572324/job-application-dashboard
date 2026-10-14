@@ -217,7 +217,8 @@
     </label>
     <div class="c-dim" style="font-size:11px;margin:5px 0 0 24px">Выключено — ответы проходят без проверки зарплаты, опыта и сроков. Настройка общая с разделом LLM; проверка рода остаётся включённой.</div>
   </div>
-  <p class="c-dim" style="font-size:12px;margin:8px 0 14px">Здесь показаны отклики, для которых сохранена трасса анкеты. «Отправлен» означает подтверждённый результат HH; «отправка начата» без подтверждения требует проверки в HH.</p>
+  <p class="c-dim" style="font-size:12px;margin:8px 0 6px">Здесь показаны попытки с сохранённой трассой анкеты. Жёлтая запись означает, что нового подтверждённого отклика нет. Откройте запись, чтобы увидеть этап и ответы.</p>
+  <p id="questionnaire-history-outcomes" class="c-dim" style="font-size:12px;margin:0 0 14px"></p>
   <div id="questionnaire-history-list" aria-live="polite">Загрузка…</div>
   <div id="questionnaire-history-more" style="display:none;text-align:center;margin:12px">
     <button class="btn-refresh" type="button" onclick="loadMoreQuestionnaireHistory()">Показать ещё</button>
