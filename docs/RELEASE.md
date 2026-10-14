@@ -9,10 +9,9 @@ Workflow [CI and release](../.github/workflows/ci-release.yml) запускае�
 - [job-application-dashboard-linux-x64.tar.gz](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-linux-x64.tar.gz) — Linux x64;
 - [job-application-dashboard-windows-x64.zip](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-windows-x64.zip) — Windows x64;
 - [SHA256SUMS.txt](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/SHA256SUMS.txt) — контрольные суммы архивов;
-- [Docker-образ](https://github.com/Vlad9572324/job-application-dashboard/pkgs/container/job-application-dashboard) `ghcr.io/vlad9572324/job-application-dashboard:<версия>` в GitHub Packages.
 
-Архивы и контрольные суммы прикладываются к GitHub Release. Стабильный тег
-обновляет также Docker-тег `latest`.
+Архивы и контрольные суммы прикладываются к GitHub Release. GHCR-образ
+публикуется только при закрытом репозитории; публичные пакеты удалены.
 
 Предрелизный тег с суффиксом, например `v1.0.3-rc.1`, отмечается как prerelease
 и не обновляет `latest`. При повторном запуске workflow архивы в существующем
@@ -40,9 +39,10 @@ Workflow [CI and release](../.github/workflows/ci-release.yml) запускае�
 
 ## Запуск Docker-образа
 
-На Linux из каталога с локальными `data/` и `.env`:
+На Linux из корня проекта с локальными `data/` и `.env`:
 
 ```bash
+docker build -t job-application-dashboard:local .
 mkdir -p data
 docker run --name job-application-dashboard --rm \
   --user "$(id -u):$(id -g)" \
@@ -50,12 +50,12 @@ docker run --name job-application-dashboard --rm \
   -e HH_BOT_HOST=0.0.0.0 -e HH_BOT_ALLOW_CONTAINER_BIND=1 \
   -p 127.0.0.1:8000:8000 \
   -v "$PWD/data:/app/data" \
-  ghcr.io/vlad9572324/job-application-dashboard:latest
+  job-application-dashboard:local
 ```
 
 В `.env` нужен `HH_BOT_API_KEY`. Контейнер доступен только с хоста через
 `127.0.0.1:8000`; внутри он слушает `0.0.0.0` для Docker DNAT. Замените
-версию образа на нужный релиз.
+тег локального образа при необходимости.
 Docker-образ содержит основную CAPTCHA-модель, но не данные аккаунтов.
 Если нужны дополнительные загружаемые модели, подключите папку `models/`
 с правом записи и сохраните в ней основную модель до монтирования: bind mount

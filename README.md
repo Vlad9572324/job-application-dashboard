@@ -34,8 +34,8 @@
 для [Linux x64](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-linux-x64.tar.gz)
 или [Windows x64](https://github.com/Vlad9572324/job-application-dashboard/releases/latest/download/job-application-dashboard-windows-x64.zip),
 распакуйте и запустите `job-application-dashboard` или `job-application-dashboard.exe`. Затем откройте
-<http://127.0.0.1:8000>. Для Docker используйте [готовый образ и инструкцию](docs/RELEASE.md#запуск-docker-образа).
-Основная локальная модель распознавания капчи уже включена в архивы и Docker-образ.
+<http://127.0.0.1:8000>. Для Docker используйте [локальную сборку](docs/RELEASE.md#запуск-docker-образа).
+Основная локальная модель распознавания капчи уже включена в архивы и локально собираемый Docker-образ.
 
 При запуске из исходников `docker compose` требует локальный `.env` с
 `HH_BOT_API_KEY` и публикует порт 8000 в локальную сеть. Перед этим прочитайте
