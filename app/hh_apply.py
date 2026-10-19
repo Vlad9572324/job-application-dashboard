@@ -701,7 +701,11 @@ async def _fill_and_submit_questionnaire_impl(acc: dict, vid: str,
         emit("exception", error_type=type(e).__name__, dispatched=dispatched)
         if dispatched:
             return await unconfirmed()
-        return "error", {"error_code": "questionnaire_fetch_failed"}
+        # Сбой соединения ДО отправки: помечаем сетевым, чтобы менеджер включил автовосстановление
+        # (раньше серия таких сбоев ставила жёсткую авто-паузу «снимите вручную»).
+        from app.network_errors import pre_dispatch_network_info
+        return "error", pre_dispatch_network_info(e, "questionnaire_fetch_failed") or {
+            "error_code": "questionnaire_fetch_failed"}
 
 
 async def fill_and_submit_questionnaire(acc: dict, vid: str,
